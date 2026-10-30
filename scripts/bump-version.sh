@@ -4,8 +4,9 @@
 # Usage: scripts/bump-version.sh X.Y.Z [--no-lock]
 #
 # Writes X.Y.Z into `version` of pyproject.toml, `version` of
-# plugin/claude-code/.claude-plugin/plugin.json and the `@vX.Y.Z` ref of the
-# package source in plugin/claude-code/.mcp.json, then refreshes uv.lock with
+# plugin/claude-code/.claude-plugin/plugin.json, the `@vX.Y.Z` ref of the
+# package source in plugin/claude-code/.mcp.json and `version` of
+# npm/package.json, then refreshes uv.lock with
 # `uv lock` (skipped with --no-lock) and runs scripts/check-version.sh. It never
 # commits and never tags: the tag is cut on the merge of the release pull
 # request, so the plugin can name a tag that does not exist yet.
@@ -71,6 +72,12 @@ rewrite(
 rewrite(
     "plugin/claude-code/.mcp.json",
     r'(knowledge\.git@v)\d+\.\d+\.\d+(")',
+    rf"\g<1>{version}\g<2>",
+)
+# The first "version" key of the manifest is the package's own.
+rewrite(
+    "npm/package.json",
+    r'("version"\s*:\s*")[^"]*(")',
     rf"\g<1>{version}\g<2>",
 )
 PY
