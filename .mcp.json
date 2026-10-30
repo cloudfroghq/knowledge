@@ -10,8 +10,7 @@
       "env": {
         "MEMORY_PROJECT": "knowledge",
         "MEMORY_VAULT_ROOT": "${HOME}/.cloudfrog",
-        "MEMORY_PROJECTS_SYNC": "1",
-        "MEMORY_CLOUD_AUTOSYNC": "1"
+        "MEMORY_PROJECTS_SYNC": "1"
       }
     },
     "graphify": {
