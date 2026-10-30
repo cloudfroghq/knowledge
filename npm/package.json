@@ -1,0 +1,42 @@
+{
+  "name": "@cloudfrog/knowledge",
+  "version": "0.8.0",
+  "description": "Knowledge MCP server and vault tooling (cloudfrog-knowledge), run through a pinned uv",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "knowledge",
+    "obsidian",
+    "uv"
+  ],
+  "homepage": "https://github.com/cloudfroghq/knowledge#readme",
+  "bugs": {
+    "url": "https://github.com/cloudfroghq/knowledge/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cloudfroghq/knowledge.git",
+    "directory": "npm"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "CloudFrog <admin@cloudfrog.com.mx>",
+  "bin": {
+    "knowledge": "bin/knowledge.js",
+    "cloudfrog-knowledge": "bin/cloudfrog-knowledge.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
