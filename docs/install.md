@@ -12,7 +12,7 @@ Tres perfiles, una línea cada uno. Todos salen del marketplace público `cloudf
 
 ## Prerrequisitos
 
-- Claude Code 2.1.224 o posterior (`claude --version`).
+- Claude Code 2.1.275 o posterior, el mismo mínimo que pide el marketplace `cloudfroghq/claude-plugins` (`claude --version`).
 - Para `knowledge` (stdio):
   - `uv` (`brew install uv`) con un CPython de `uv`: el plugin lanza el servidor con `uvx --managed-python --python 3.12`, que descarga un Python 3.12 gestionado la primera vez si no lo tienes. Hace falta porque `sqlite-vec`, la extensión que ordena los vectores, solo carga en un Python con extensiones habilitadas, y el de python.org para macOS no las trae. Sin ella el servidor sigue funcionando: ordena los vectores con la biblioteca estándar (`vector_backend: python` en `doctor` y `/health`, unos 110 ms por consulta en lugar de unos 10) y da el mismo resultado; solo cambia la velocidad. `KNOWLEDGE_REQUIRE_SQLITE_VEC=1` convierte ese respaldo en el error `E_SQLITE_VEC_UNAVAILABLE`. `uvx` tiene que resolverse desde el entorno con el que arranca Claude Code. Si lo abres desde el Dock y no hereda tu `PATH`, define `UVX_BIN` con la ruta absoluta (`/opt/homebrew/bin/uvx`).
   - `bash` en el `PATH` para el hook de inicio de sesión del plugin (`#!/usr/bin/env bash`): el tope de 8 segundos del doctor necesita control de trabajos sin terminal, que `dash` (el `/bin/sh` de Debian y Ubuntu) no da. macOS y las distribuciones de escritorio lo traen; Alpine no lo trae por omisión (`apk add bash`). Sin `bash` el hook no arranca, pero el servidor MCP no depende de él: solo se pierde el aviso de `doctor --brief`.
