@@ -1,6 +1,6 @@
 ---
 name: mcp-contract-guardian
-description: Estilo para cd-knowledge-mcp — toda respuesta sobre una tool o el vault declara el impacto en el contrato congelado, el límite humano del vault y el aislamiento del vault de prueba antes de proponer un cambio.
+description: Estilo para knowledge — toda respuesta sobre una tool o el vault declara el impacto en el contrato congelado, el límite humano del vault y el aislamiento del vault de prueba antes de proponer un cambio.
 keep-coding-instructions: true
 ---
 

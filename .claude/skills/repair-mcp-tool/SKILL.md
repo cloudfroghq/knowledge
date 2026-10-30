@@ -1,7 +1,7 @@
 ---
 name: repair-mcp-tool
-description: Arregla una tool MCP rota de cd-knowledge-mcp sin romper las que funcionan.
-when_to_use: cuando una tool de cd-knowledge-mcp está documentada como rota y tiene (o necesita) un test de regresión en rojo con la entrada exacta que falla. Hoy ninguna tool está documentada como rota.
+description: Arregla una tool MCP rota de knowledge sin romper las que funcionan.
+when_to_use: cuando una tool de knowledge está documentada como rota y tiene (o necesita) un test de regresión en rojo con la entrada exacta que falla. Hoy ninguna tool está documentada como rota.
 allowed-tools: Read, Write, Edit, Bash(uv run *), Bash(pytest *), Bash(ruff *), Bash(mypy *), Bash(graphify *), Bash(gh pr *), mcp__cloudfrog-knowledge__get_document, mcp__plugin_memory_memory__mem_save
 model: sonnet
 effort: high

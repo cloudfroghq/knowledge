@@ -1,6 +1,6 @@
 ---
 name: knowledge-curator
-description: Propone correcciones de frontmatter y de enlaces sobre documentos vencidos del vault de cd-knowledge-mcp, siempre como PR con el dueño como revisor.
+description: Propone correcciones de frontmatter y de enlaces sobre documentos vencidos del vault de knowledge, siempre como PR con el dueño como revisor.
 model: sonnet
 effort: medium
 tools: Read, Bash(uv run pytest *), mcp__cloudfrog-knowledge__get_stale_docs, mcp__cloudfrog-knowledge__suggest_links, mcp__cloudfrog-knowledge__get_document

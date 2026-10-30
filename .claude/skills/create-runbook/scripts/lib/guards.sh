@@ -10,7 +10,7 @@
 # --------------------------------------------------------------------------- #
 # Checkout resolution
 #
-# This package is deployed into the cd-knowledge-mcp checkout, whose directory
+# This package is deployed into the knowledge checkout, whose directory
 # name is not guaranteed, and it runs next to an ai-architecture checkout whose
 # name is not guaranteed either. Neither may be written as a path here: a path
 # baked into a script decides by accident whether a run works on another
@@ -92,7 +92,7 @@ guard_dest_outside_vault() {
   # absolute destination for the wrong reason. Refuse explicitly instead: the
   # guard cannot protect a vault it could not locate.
   if [ -z "$vault" ]; then
-    printf 'guard_dest_outside_vault: no se resolvió la raíz del vault; exporta MEMORY_VAULT_ROOT o ejecuta desde el checkout de cd-knowledge-mcp\n' >&2
+    printf 'guard_dest_outside_vault: no se resolvió la raíz del vault; exporta MEMORY_VAULT_ROOT o ejecuta desde el checkout de knowledge\n' >&2
     return 3
   fi
   dest_abs="$(cd "$dest" 2> /dev/null && pwd -P)" || dest_abs="$dest"

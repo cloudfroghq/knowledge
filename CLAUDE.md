@@ -1,4 +1,4 @@
-# cd-knowledge-mcp
+# knowledge
 
 ## Qué es
 

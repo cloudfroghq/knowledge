@@ -8,7 +8,7 @@ const DIMENSIONS = [
   {
     key: 'async-safety',
     prompt:
-      'Revisa el diff de cd-knowledge-mcp buscando funciones async invocadas sin await (la clase de bug que rompió compare_flows y search_deep con "coroutine is not iterable"), o una tool nueva sin test asíncrono ni test de esquema. Reporta hallazgos con archivo, línea y escenario de falla concreto.',
+      'Revisa el diff de knowledge buscando funciones async invocadas sin await (la clase de bug que rompió compare_flows y search_deep con "coroutine is not iterable"), o una tool nueva sin test asíncrono ni test de esquema. Reporta hallazgos con archivo, línea y escenario de falla concreto.',
   },
   {
     key: 'tool-contract',

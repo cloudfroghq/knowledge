@@ -80,7 +80,7 @@ $MEMORY_PROJECT_STAGING/create-runbook/RB-NNN <Title>.md
 1. Agrega una fila a la tabla de `Runbooks.md` del vault (el index). No edites el vault todavía; prepara la fila en staging.
 2. Si el `pattern` es nuevo (no aparece en `Issue Patterns from Jira.md` del vault), actualiza ese documento también en staging.
 3. Redacta el cuerpo del PR con el título `docs(runbooks): add RB-NNN <slug>` y el changelog.
-4. **Delega el resto en `open-pr`**: esa skill maneja el PR contra `master` de `cd-knowledge-mcp` en la rama `docs/rb-nnn-<slug>`. Ella abre, asigna revisor y notifica.
+4. **Delega el resto en `open-pr`**: esa skill maneja el PR contra `main` de `knowledge` en la rama `docs/rb-nnn-<slug>`. Ella abre, asigna revisor y notifica.
 5. Nota: El merge del PR es paso manual, humano.
 
 ### 8. Aplicación del documento al vault (paso manual, después del PR)
