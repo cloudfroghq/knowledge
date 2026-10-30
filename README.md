@@ -27,7 +27,7 @@ La instalación por plugins de Claude Code (marketplace `cloudfroghq`, una líne
 uv tool install --managed-python --python 3.12 cloudfrog-knowledge   # PyPI; después: knowledge doctor
 uvx --managed-python --python 3.12 cloudfrog-knowledge doctor        # PyPI, sin instalar
 npx @cloudfrog/knowledge doctor                                      # npm (o pnpm dlx @cloudfrog/knowledge doctor)
-uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v0.8.0 cloudfrog-knowledge doctor   # tag de git
+uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v0.9.0 cloudfrog-knowledge doctor   # tag de git
 ```
 
 El paquete de npm descarga un `uv` fijo, verificado por SHA-256, y corre con él la versión de PyPI que le corresponde. Detalle y requisitos en [`docs/install.md`](docs/install.md), «Instalar el CLI».
@@ -429,7 +429,7 @@ uv run python -m knowledge.server
 
 ## Línea de comandos
 
-El entry point `cloudfrog-knowledge` (`knowledge.cli:main`) tiene nueve subcomandos; sin ninguno equivale a `serve`, y `python -m knowledge.server` sigue funcionando. `knowledge` es un segundo nombre del mismo entry point: el uso (`--help`) y `--version` (`knowledge 0.8.0` o `cloudfrog-knowledge 0.8.0`) nombran el comando que corriste.
+El entry point `cloudfrog-knowledge` (`knowledge.cli:main`) tiene nueve subcomandos; sin ninguno equivale a `serve`, y `python -m knowledge.server` sigue funcionando. `knowledge` es un segundo nombre del mismo entry point: el uso (`--help`) y `--version` (`knowledge 0.9.0` o `cloudfrog-knowledge 0.9.0`) nombran el comando que corriste.
 
 | Comando | Qué hace | Códigos de salida |
 |---|---|---|

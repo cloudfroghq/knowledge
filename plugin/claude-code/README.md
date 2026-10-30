@@ -13,7 +13,7 @@ La guía completa por equipo, con prerrequisitos y precalentado de la caché, es
 
 | Pieza | Qué hace |
 |---|---|
-| `.mcp.json` | Servidor `knowledge`: `uvx --managed-python --python 3.12 --from git+ssh://git@github.com/cloudfroghq/knowledge.git@v<versión> cloudfrog-knowledge serve --transport stdio`. Sus tools llegan como `mcp__plugin_knowledge_knowledge__<tool>` y el servidor aparece en `/mcp` como `plugin:knowledge:knowledge`. |
+| `.mcp.json` | Servidor `knowledge`: `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v<versión> cloudfrog-knowledge serve --transport stdio`. Sus tools llegan como `mcp__plugin_knowledge_knowledge__<tool>` y el servidor aparece en `/mcp` como `plugin:knowledge:knowledge`. |
 | `hooks/hooks.json` | `SessionStart` que corre `cloudfrog-knowledge doctor --brief` con el mismo paquete y las mismas opciones que el servidor. No imprime nada si todo está bien; si algo falla, una sola línea de hasta 200 bytes, sin contar el salto de línea (el tope de `doctor --brief`). También habla, con el doctor sano, cuando un vault servido declara `Contexts/config.json` y esta máquina no lo inicializó: `knowledge doctor: init pending for vault(s) <slugs>; run: cloudfrog-knowledge init`. Si el doctor no contesta en 8 segundos (caché de `uv` fría) también calla. Si `uvx` falla sin que el doctor diga nada (sin red, o un tag que el remoto no tiene), avisa una vez por día y por versión del plugin, no en cada arranque. Lo único que el hook escribe en disco es la marca de ese aviso (ver Diagnóstico). Con el doctor sano, lanza además `cloudfrog-knowledge jira sync --auto` en segundo plano, desprendido del hook (no lo espera ni muestra su salida): sincroniza los vaults que declaran `jira`, tienen sus variables y ya cumplieron `sync.throttle_minutes`, y escribe sus tareas en el memory local y el cursor junto al índice. `KNOWLEDGE_JIRA_AUTOSYNC=0` lo apaga (`docs/runbooks/sincronizar-jira.md`). |
 | `skills/search-first` | Protocolo de lectura: `search` con campos de puntero y `get_document` de una sola sección. |
 | `skills/repair-mcp-tool` | Reparación de una tool rota con su test de regresión en rojo primero. |
@@ -47,7 +47,7 @@ Para guardarlas: `/plugin` → `Installed` → `knowledge` → `Configure` dentr
 ## Diagnóstico
 
 ```bash
-uvx --managed-python --python 3.12 --from 'git+ssh://git@github.com/cloudfroghq/knowledge.git@v0.8.0' cloudfrog-knowledge doctor
+uvx --managed-python --python 3.12 --from 'git+https://github.com/cloudfroghq/knowledge.git@v0.9.0' cloudfrog-knowledge doctor
 ```
 
 Imprime un JSON con la regla de descubrimiento que ganó, el archivo de registro, por vault el directorio, el proveedor y si su clave está definida (nunca el valor), si `KNOWLEDGE_HOME` se puede escribir y las versiones del paquete y del contrato. Sale con 0 si todo está bien, 1 con problemas y 2 si la configuración no carga.

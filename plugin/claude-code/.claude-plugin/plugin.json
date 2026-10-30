@@ -1,7 +1,7 @@
 {
   "name": "knowledge",
   "displayName": "Knowledge (stdio)",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Servidor MCP de conocimiento curado sobre tus vaults locales, lanzado con uvx",
   "author": {
     "name": "CloudFrog",

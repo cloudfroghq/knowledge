@@ -16,7 +16,7 @@ Los dos comandos, `knowledge` y `cloudfrog-knowledge`, son el mismo programa. Si
 |---|---|---|
 | PyPI con `uv` | `uv tool install --managed-python --python 3.12 cloudfrog-knowledge` | `knowledge …` (o sin instalar: `uvx --managed-python --python 3.12 cloudfrog-knowledge …`) |
 | npm (este paquete) | `npm install -g @cloudfrog/knowledge` | `knowledge …` (o sin instalar: `npx @cloudfrog/knowledge …`, `pnpm dlx @cloudfrog/knowledge …`) |
-| Tag de git | — | `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v0.8.0 cloudfrog-knowledge …` |
+| Tag de git | — | `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v0.9.0 cloudfrog-knowledge …` |
 
 Las tres corren el mismo código: la versión de este paquete es la de PyPI y la del tag. `--python 3.12` importa porque `uv` ignora el tope de `requires-python` al elegir intérprete; este paquete lo pasa siempre. La guía completa, con el plugin de Claude Code y los vaults, está en [`docs/install.md`](https://github.com/cloudfroghq/knowledge/blob/main/docs/install.md).
 
@@ -28,13 +28,13 @@ Las tres corren el mismo código: la versión de este paquete es la de PyPI y la
     "knowledge": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@cloudfrog/knowledge@0.8.0", "serve", "--transport", "stdio"]
+      "args": ["-y", "@cloudfrog/knowledge@0.9.0", "serve", "--transport", "stdio"]
     }
   }
 }
 ```
 
-El primer arranque descarga `uv`, un CPython 3.12 gestionado por `uv` (si no hay uno) y las dependencias del paquete: puede pasar de los 30 s que un cliente MCP espera por omisión. Córrelo una vez a mano (`npx @cloudfrog/knowledge@0.8.0 doctor`) para dejar la caché caliente. El paquete nunca escribe en stdout: todo lo que imprime antes de arrancar el CLI va a stderr.
+El primer arranque descarga `uv`, un CPython 3.12 gestionado por `uv` (si no hay uno) y las dependencias del paquete: puede pasar de los 30 s que un cliente MCP espera por omisión. Córrelo una vez a mano (`npx @cloudfrog/knowledge@0.9.0 doctor`) para dejar la caché caliente. El paquete nunca escribe en stdout: todo lo que imprime antes de arrancar el CLI va a stderr.
 
 ## Qué hace en tu máquina
 
