@@ -71,9 +71,17 @@ BRIEF_MAX_BYTES = 200
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    # Usage and --version name the console script that was run: `knowledge` and
+    # `cloudfrog-knowledge` are the same entry point.
     parser = argparse.ArgumentParser(
-        prog="cloudfrog-knowledge",
+        prog=contexts.invoked_command(),
         description="Knowledge MCP server and vault tooling.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {_package_version()}",
+        help=f"print the installed {DISTRIBUTION} version and exit",
     )
     sub = parser.add_subparsers(dest="command")
 

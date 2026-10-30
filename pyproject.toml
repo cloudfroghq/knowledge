@@ -19,6 +19,9 @@ dependencies = [
 
 [project.scripts]
 cloudfrog-knowledge = "knowledge.cli:main"
+# Short alias of the same entry point; usage, --version and the command hints
+# name whichever of the two was run (knowledge.contexts.invoked_command).
+knowledge = "knowledge.cli:main"
 
 [build-system]
 requires = ["hatchling"]

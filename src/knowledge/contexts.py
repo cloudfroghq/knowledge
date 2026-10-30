@@ -64,6 +64,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -93,6 +94,8 @@ COMMAND_LABEL_ENV = "KNOWLEDGE_COMMAND_LABEL"
 #: Replaced by the subcommand inside a label; a label without it is followed by the subcommand.
 COMMAND_PLACEHOLDER = "{command}"
 DEFAULT_COMMAND = "cloudfrog-knowledge"
+#: The console scripts ``[project.scripts]`` installs, both bound to ``knowledge.cli:main``.
+COMMAND_NAMES = (DEFAULT_COMMAND, "knowledge")
 
 EXCLUDE_LOCAL = "local"
 EXCLUDE_GITIGNORE = "gitignore"
@@ -146,17 +149,33 @@ Prompt = Callable[[str], "str | None"]
 
 
 
+def invoked_command(argv0: str | None = None) -> str:
+    """The console script this process runs as: one of :data:`COMMAND_NAMES`.
+
+    ``argv0`` defaults to ``sys.argv[0]``. A Windows launcher's ``.exe`` suffix
+    is ignored; anything else (``python -m knowledge``, a test runner) is
+    :data:`DEFAULT_COMMAND`.
+    """
+    # Both separators on every platform, so a Windows path reads the same anywhere.
+    name = (sys.argv[0] if argv0 is None else argv0).replace("\\", "/").rsplit("/", 1)[-1]
+    if name.lower().endswith(".exe"):
+        name = name[: -len(".exe")]
+    return name if name in COMMAND_NAMES else DEFAULT_COMMAND
+
+
 def command_label(env: Mapping[str, str], command: str) -> str:
     """The command a hint names for ``command`` (``init``, ``doctor``).
 
     ``KNOWLEDGE_COMMAND_LABEL`` lets a wrapper name itself instead of this CLI:
     ``{command}`` inside it is replaced by the subcommand
     (``Contexts/scripts/{command}.sh``), and a label without it is followed by
-    the subcommand. Unset or blank, the hint names ``cloudfrog-knowledge``.
+    the subcommand. Unset or blank, the hint names the console script the
+    process runs as (:func:`invoked_command`): ``knowledge`` or
+    ``cloudfrog-knowledge``.
     """
     label = (env.get(COMMAND_LABEL_ENV) or "").strip()
     if not label:
-        return f"{DEFAULT_COMMAND} {command}"
+        return f"{invoked_command()} {command}"
     if COMMAND_PLACEHOLDER in label:
         return label.replace(COMMAND_PLACEHOLDER, command)
     return f"{label} {command}"
