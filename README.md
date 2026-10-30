@@ -21,6 +21,17 @@ Server MCP con búsqueda semántica, navegación por grafo y queries estructurad
 
 La instalación por plugins de Claude Code (marketplace `cloudfroghq`, una línea por equipo) está en [`docs/install.md`](docs/install.md). Lo que sigue es el registro manual.
 
+**El CLI en tu terminal** (`init`, `doctor`, `vault-lint`…): el paquete se publica en PyPI, en npm y como tag de git, siempre con la misma versión, y deja dos comandos que son el mismo programa, `knowledge` y `cloudfrog-knowledge`.
+
+```bash
+uv tool install --managed-python --python 3.12 cloudfrog-knowledge   # PyPI; después: knowledge doctor
+uvx --managed-python --python 3.12 cloudfrog-knowledge doctor        # PyPI, sin instalar
+npx @cloudfrog/knowledge doctor                                      # npm (o pnpm dlx @cloudfrog/knowledge doctor)
+uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v0.8.0 cloudfrog-knowledge doctor   # tag de git
+```
+
+El paquete de npm descarga un `uv` fijo, verificado por SHA-256, y corre con él la versión de PyPI que le corresponde. Detalle y requisitos en [`docs/install.md`](docs/install.md), «Instalar el CLI».
+
 Pide a quien administra el stack dos credenciales, por canal seguro y nunca por git: la `MCP_API_KEY` del knowledge MCP y el `MEMORY_CLOUD_TOKEN` de memory.
 
 Son dos piezas con roles distintos, y conviene entender la diferencia antes de instalar nada:
@@ -418,7 +429,7 @@ uv run python -m knowledge.server
 
 ## Línea de comandos
 
-El entry point `cloudfrog-knowledge` (`knowledge.cli:main`) tiene nueve subcomandos; sin ninguno equivale a `serve`, y `python -m knowledge.server` sigue funcionando.
+El entry point `cloudfrog-knowledge` (`knowledge.cli:main`) tiene nueve subcomandos; sin ninguno equivale a `serve`, y `python -m knowledge.server` sigue funcionando. `knowledge` es un segundo nombre del mismo entry point: el uso (`--help`) y `--version` (`knowledge 0.8.0` o `cloudfrog-knowledge 0.8.0`) nombran el comando que corriste.
 
 | Comando | Qué hace | Códigos de salida |
 |---|---|---|
@@ -435,11 +446,11 @@ El entry point `cloudfrog-knowledge` (`knowledge.cli:main`) tiene nueve subcoman
 
 ### Etiqueta del comando en las pistas
 
-Las pistas que dicen qué correr (la línea de `doctor --brief`, `init.command` del JSON de `doctor`, el aviso `W_CONTEXTS_INIT_PENDING`, el `_README` de cada `repos.local.json`, la pista de un conflicto de `init` y el encabezado de su reporte) nombran `cloudfrog-knowledge init` o `cloudfrog-knowledge doctor`. Un vault cuyos clientes llaman a `init` y `doctor` por medio de sus propios scripts fija `KNOWLEDGE_COMMAND_LABEL` en ellos, y las pistas nombran esos scripts en lugar de este CLI:
+Las pistas que dicen qué correr (la línea de `doctor --brief`, `init.command` del JSON de `doctor`, el aviso `W_CONTEXTS_INIT_PENDING`, el `_README` de cada `repos.local.json`, la pista de un conflicto de `init` y el encabezado de su reporte) nombran `cloudfrog-knowledge init` o `cloudfrog-knowledge doctor`, o `knowledge init` y `knowledge doctor` cuando corriste el CLI como `knowledge`. Un vault cuyos clientes llaman a `init` y `doctor` por medio de sus propios scripts fija `KNOWLEDGE_COMMAND_LABEL` en ellos, y las pistas nombran esos scripts en lugar de este CLI, con cualquiera de los dos nombres:
 
 | `KNOWLEDGE_COMMAND_LABEL` | Pista para `init` | Pista para `doctor --client` |
 |---|---|---|
-| sin definir o en blanco | `cloudfrog-knowledge init` | `cloudfrog-knowledge doctor --client` |
+| sin definir o en blanco | `cloudfrog-knowledge init` (`knowledge init` si corriste `knowledge`) | `cloudfrog-knowledge doctor --client` (`knowledge doctor --client`) |
 | `Contexts/scripts/{command}.sh` | `Contexts/scripts/init.sh` | `Contexts/scripts/doctor.sh` |
 | `acme-knowledge` | `acme-knowledge init` | `acme-knowledge doctor` |
 
@@ -472,6 +483,7 @@ Default `MCP_TRANSPORT=stdio`. Para registrarlo en Claude Code apuntando al bina
 uv sync --all-groups          # instala el grupo dev, todo con versión exacta
 uv run ruff check
 uv run pytest -q              # corre contra tests/fixtures/vault/, sin red ni API key
+(cd npm && npm test)          # el paquete de npm: node --test, sin dependencias ni red
 ```
 
 La suite nunca toca el vault real ni la API de OpenAI: `tests/conftest.py` apunta
@@ -484,7 +496,7 @@ descartable y reemplaza los embeddings por un stub. Por eso no hace falta
 
 | Evento | Jobs |
 |---|---|
-| `pull_request` a `main` | lint y suite con cobertura, import-linter, gitleaks sobre los commits del PR, Semgrep CE y cobertura del parche |
+| `pull_request` a `main` | lint y suite con cobertura (más `node --test` del paquete de npm, en el mismo job), import-linter, gitleaks sobre los commits del PR, Semgrep CE y cobertura del parche |
 | `push` a `main` | los mismos salvo la cobertura del parche (el diff contra `origin/main` queda vacío), más la imagen de Docker construida y probada en amd64 |
 | `workflow_dispatch` | los mismos que en `push`, sobre la rama que elijas: `gh workflow run ring1.yml --ref <rama>` |
 
@@ -512,7 +524,7 @@ es una compuerta y nunca escribe en el vault.
 `.github/workflows/release-check.yml` es la verificación de una release: corre
 en cada tag `v*` que se empuja y a mano. No lee secrets ni environments y su
 token es de solo lectura. Comprueba, en este orden: que `pyproject.toml`,
-`plugin.json`, el `@v<versión>` de `.mcp.json` y `uv.lock` coincidan
+`plugin.json`, el `@v<versión>` de `.mcp.json`, `npm/package.json` y `uv.lock` coincidan
 (`scripts/check-version.sh`, que compara además el tag cuando el ref es un tag;
 desde una rama no hay tag y solo compara los archivos), que cada
 `tests/golden/v*/SHA256SUMS` se cumpla y que `test_contract_frozen.py`,
@@ -525,6 +537,22 @@ despacho usa el workflow del ref que elijas: `gh workflow run release-check.yml
 --ref main` sirve, un tag anterior a `release-check.yml` no (no trae el
 archivo). Quien corta la release espera el verde de la corrida del tag antes de
 abrir el pull request del marketplace (`cloudfroghq/claude-plugins`).
+
+`.github/workflows/publish.yml` publica cada tag `v*` en PyPI
+(`cloudfrog-knowledge`) y en npm (`@cloudfrog/knowledge`). Un primer job, sin
+más permiso que leer el repositorio, compara el tag con todas las versiones,
+comprueba las sumas de `uv` que trae el paquete de npm contra la release de `uv`
+y lo instala con el código del propio paquete, corre `node --test` y
+`npm pack --dry-run` en `npm/`, construye el sdist y el wheel, instala el wheel en
+un entorno limpio de Python 3.12 y exige que `cloudfrog-knowledge --version` y
+`knowledge --version` impriman la versión. Solo entonces el segundo job, con el
+environment `release` e `id-token: write`, publica por trusted publishing (OIDC,
+sin secrets): PyPI con `uv publish --trusted-publishing always` y npm con
+`npm publish --provenance --access public`. Cada registro se salta, con un aviso,
+solo si esa versión exacta ya existe; cualquier otra respuesta lo hace fallar. A
+mano, `gh workflow run publish.yml --ref main` construye y verifica sin publicar.
+La operación, el primer `npm publish` a mano y la configuración de los trusted
+publishers están en `docs/runbooks/ci-ring1.md`, sección 7.
 
 Dos cosas que conviene leer bien antes de confiar en un verde:
 
@@ -626,6 +654,9 @@ Contrato 2.0.0. El catálogo depende del perfil y de las `features` de los vault
 | `scripts/notify-stale-report.sh` | Publica ese reporte en el webhook de `STALE_REPORT_WEBHOOK_URL`. Exit `3` si le falta un binario: nunca lo disfraza de fallo de red. |
 | `scripts/tests/notify-stale-report-canaries.sh` | Batería de canarios del aviso. Fija los cuatro códigos de salida con igualdad exacta. |
 | `scripts/tests/ring1-gates-canaries.sh` | Batería de canarios de las compuertas de anillo 1. Rompe cada una a propósito y exige el fallo exacto. `--with-semgrep` agrega los casos que usan la imagen fijada. |
+| `scripts/ci-install-uv.sh DIR` | Instala en `DIR` el `uv` que fija `npm/lib/uv-release.json`, desde su release en GitHub y verificado por SHA-256; lo usa `publish.yml`. |
+| `scripts/bump-version.sh X.Y.Z` / `scripts/check-version.sh [vX.Y.Z]` | Mueven y comprueban la versión en `pyproject.toml`, `plugin.json`, `.mcp.json`, `npm/package.json` y `uv.lock`. |
+| `npm/scripts/uv-release.js <versión>\|--check\|--smoke` | Regenera las sumas SHA-256 de `uv` que trae el paquete de npm desde los `.sha256` de la release, las compara con la release, o instala `uv` con el código del paquete y corre `uv --version`. |
 
 Estos scripts son para el modo stdio local. En el servidor el índice vive en el volumen `knowledge-index` y se mantiene vía webhook; no hay instantánea que exportar ni importar: el índice se reconstruye desde el vault.
 

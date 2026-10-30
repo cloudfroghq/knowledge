@@ -1,6 +1,6 @@
 # Operar el anillo 1 en GitHub Actions
 
-Runbook para quien administra `cloudfroghq/knowledge`: qué corre en Actions, qué exige el ruleset `protect-main`, cuánto cuesta en minutos, cómo rotar una deploy key de lectura y cómo volver atrás sin dejar PRs bloqueados. El reporte semanal de documentos vencidos no corre aquí: lo ejecuta el workflow de cada vault, que trae `scripts/weekly-stale-report.py` y `scripts/notify-stale-report.sh` de este repositorio. Qué hace cada job y por qué está en `README.md`, sección «Tests y compuertas de merge».
+Runbook para quien administra `cloudfroghq/knowledge`: qué corre en Actions, qué exige el ruleset `protect-main`, cuánto cuesta en minutos, cómo rotar una deploy key de lectura, cómo volver atrás sin dejar PRs bloqueados y cómo se publica una release en PyPI y npm. El reporte semanal de documentos vencidos no corre aquí: lo ejecuta el workflow de cada vault, que trae `scripts/weekly-stale-report.py` y `scripts/notify-stale-report.sh` de este repositorio. Qué hace cada job y por qué está en `README.md`, sección «Tests y compuertas de merge».
 
 ## 1. Estado
 
@@ -10,8 +10,10 @@ Runbook para quien administra `cloudfroghq/knowledge`: qué corre en Actions, qu
 | Token de los workflows | `default_workflow_permissions: read`; cada workflow declara `permissions: contents: read` | `gh api repos/cloudfroghq/knowledge/actions/permissions/workflow` |
 | `ring1.yml` | `pull_request` a `main`, `push` a `main` y `workflow_dispatch`; ningún secret | `gh workflow view ring1.yml -R cloudfroghq/knowledge` |
 | `release-check.yml` | push de tags `v*` y `workflow_dispatch`; ningún secret ni environment | `gh workflow view release-check.yml -R cloudfroghq/knowledge` |
+| `publish.yml` | push de tags `v*` y `workflow_dispatch` (`dry_run`, verdadero por omisión); job `build` de solo lectura y job `publish` con el environment `release` e `id-token: write` (trusted publishing en PyPI y npm, sin secrets) | `gh workflow view publish.yml -R cloudfroghq/knowledge` |
 | Secrets de repositorio | ninguno | `gh api repos/cloudfroghq/knowledge/actions/secrets --jq .total_count` → `0` |
-| Environment `release` | política de tags `v*`, sin secrets ni jobs que lo declaren | `gh api repos/cloudfroghq/knowledge/environments/release/deployment-branch-policies` |
+| Environment `release` | política de tags `v*`, sin secrets; lo declara solo el job `publish` de `publish.yml`, y es el environment que nombran los trusted publishers de PyPI y npm | `gh api repos/cloudfroghq/knowledge/environments/release/deployment-branch-policies` |
+| Trusted publishers | PyPI `cloudfrog-knowledge` y npm `@cloudfrog/knowledge`: dueño `cloudfroghq`, repositorio `knowledge`, workflow `publish.yml`, environment `release` | sección 7 |
 | Deploy keys de lectura | una por vault que trae herramientas de este repositorio (`vault-lint`, reporte semanal), de solo lectura, registradas aquí | `gh repo deploy-key list -R cloudfroghq/knowledge` |
 
 ## 2. Checks obligatorios en `protect-main`
@@ -118,8 +120,8 @@ La función recibe cada repositorio como argumento para funcionar igual en bash 
 `release-check.yml` es la verificación entre un tag y el pull request del marketplace. Corre en cada `git push origin v<x.y.z>` y a mano. Orden de una release:
 
 1. El pull request de la release (`scripts/bump-version.sh X.Y.Z`) pasa ring1 y se mergea.
-2. Antes de empujar el tag, ensayo sobre `main` con el mismo archivo que usará el tag: `gh workflow run release-check.yml -R cloudfroghq/knowledge --ref main` y `gh run watch`. Sin tag, `check-version.sh` compara solo los archivos.
-3. `git push origin v<x.y.z>` sobre el merge. La corrida del tag compara además el tag con las versiones.
+2. Antes de empujar el tag, ensayo sobre `main` con el mismo archivo que usará el tag: `gh workflow run release-check.yml -R cloudfroghq/knowledge --ref main` y `gh workflow run publish.yml -R cloudfroghq/knowledge --ref main` (construye y verifica sin publicar), y `gh run watch` de cada una. Sin tag, `check-version.sh` compara solo los archivos.
+3. `git push origin v<x.y.z>` sobre el merge (tag firmado, sección 7). La corrida del tag compara además el tag con las versiones, y `publish.yml` publica en PyPI y npm.
 4. Solo con `release-check` en verde se abre el pull request de `cloudfroghq/claude-plugins` que mueve el marketplace al tag nuevo.
 
 ```bash
@@ -127,9 +129,77 @@ RUN=$(gh run list -R cloudfroghq/knowledge -w release-check -e push -L1 --json d
 gh run watch "$RUN" -R cloudfroghq/knowledge --exit-status
 ```
 
-Un despacho con `--ref v0.6.0` no sirve: usa el árbol del tag, que no contiene `release-check.yml`. Si falla `check-version.sh`, el tag no coincide con alguna de las cuatro versiones: se corrige en un pull request y el tag se mueve solo mientras ningún cliente lo haya instalado (de lo contrario, un tag nuevo). Si falla `claude plugin validate`, lo reproduces en local con `claude plugin validate --strict plugin/claude-code`.
+Un despacho con `--ref v0.6.0` no sirve: usa el árbol del tag, que no contiene `release-check.yml`. Si falla `check-version.sh`, el tag no coincide con alguna de las cinco versiones (`pyproject.toml`, `plugin.json`, `.mcp.json`, `npm/package.json` y `uv.lock`): `publish.yml` falla en el mismo paso y no publica nada. Se corrige en un pull request y se corta un tag nuevo: un tag que ya publicó algo no se mueve, porque PyPI y npm no aceptan volver a publicar una versión. Si falla `claude plugin validate`, lo reproduces en local con `claude plugin validate --strict plugin/claude-code`.
 
-## 7. Seguimiento
+## 7. Publicar en PyPI y npm
+
+Cada tag `v<x.y.z>` sale por tres canales con la misma versión: el tag mismo (`uvx --from git+https://github.com/cloudfroghq/knowledge.git@v<x.y.z> …`), PyPI (`cloudfrog-knowledge`) y npm (`@cloudfrog/knowledge`, que corre la versión de PyPI con un `uv` fijo). `publish.yml` hace los dos últimos.
+
+### Qué hace `publish.yml`
+
+| Job | Permisos | Qué hace |
+|---|---|---|
+| `Build and verify the release` | `contents: read` | Instala `uv` desde su release, verificado contra `npm/lib/uv-release.json` (`scripts/ci-install-uv.sh`); compara el tag con las cinco versiones (`check-version.sh`); comprueba las sumas de `uv` del paquete de npm contra los `.sha256` de la release y lo instala con el código del paquete (`npm/scripts/uv-release.js --check` y `--smoke`); corre `npm test` y `npm pack --dry-run`; construye sdist y wheel; instala el wheel en un entorno limpio de Python 3.12 y exige `cloudfrog-knowledge <versión>` y `knowledge <versión>` de `--version`; sube `dist/`. |
+| `Publish to PyPI and npm` | `contents: read`, `id-token: write`; environment `release` | Solo con un ref de tag: en el push del tag, o a mano desde el tag con `dry_run` desmarcado. PyPI primero (`uv publish --trusted-publishing always` con el wheel y el sdist del job anterior), después npm (`npm publish --provenance --access public` desde `npm/`, con npm 11.20.0). Antes de cada uno consulta el registro: `200` (esa versión ya existe) salta con un aviso, `404` publica y cualquier otra respuesta falla. |
+
+`uv` ignora el tope de `requires-python`, así que el job instala el wheel con `--python 3.12` explícito, igual que el paquete de npm y el plugin.
+
+### Una sola vez
+
+1. **PyPI**: el publicador pendiente ya existe (proyecto `cloudfrog-knowledge`, dueño `cloudfroghq`, repositorio `knowledge`, workflow `publish.yml`, environment `release`). La primera corrida de `publish.yml` crea el proyecto y el publicador pasa a ser normal; se revisa en `https://pypi.org/manage/project/cloudfrog-knowledge/settings/publishing/`.
+2. **npm, primera versión a mano**: npm solo deja configurar un trusted publisher sobre un paquete que ya existe, así que la primera versión la publica el dueño del scope `@cloudfrog` desde su máquina, con `main` en el merge de la release y antes de empujar el tag:
+
+   ```bash
+   cd ~/Projects/Tools/cloudfroghq-knowledge
+   git switch main && git pull --ff-only
+   scripts/check-version.sh                      # las cinco versiones en <x.y.z>
+   cd npm
+   npm login                                     # la cuenta dueña del scope @cloudfrog
+   npm whoami
+   npm test
+   npm pack --dry-run                            # LICENSE, README.md, package.json, bin/ y lib/
+   npm publish --access public                   # sin --provenance: la procedencia solo la firma CI
+   npm view @cloudfrog/knowledge@<x.y.z> version
+   ```
+
+   Con 2FA en la cuenta, `npm publish` pide el código (o `--otp=<código>`). Esa versión queda sin procedencia; desde la siguiente la publica `publish.yml` con procedencia. Hasta que el tag publique en PyPI, `npx @cloudfrog/knowledge@<x.y.z>` no encuentra el paquete de Python: empuja el tag enseguida.
+3. **npm, trusted publisher**: en `https://www.npmjs.com/package/@cloudfrog/knowledge/access` (Settings), sección «Trusted Publisher», elige GitHub Actions y llena: organización o usuario `cloudfroghq`, repositorio `knowledge`, archivo del workflow `publish.yml`, environment `release`. Guarda. Cuando una versión publicada por CI ya tenga procedencia (`npm view @cloudfrog/knowledge@<versión> dist.attestations`), en «Publishing access» elige «Require two-factor authentication and disallow tokens»: desde ahí solo CI publica.
+
+### Cada release
+
+1. Mergea el pull request de la release (`scripts/bump-version.sh X.Y.Z`, entrada en `docs/contract/CHANGELOG.md`).
+2. Ensayo sobre `main`: `gh workflow run publish.yml -R cloudfroghq/knowledge --ref main` (y `release-check.yml`, sección 6) y `gh run watch`.
+3. Solo la primera vez: el `npm publish` a mano y el trusted publisher de arriba.
+4. Tag firmado sobre el merge y push (el ruleset `protect-release-tags` deja crear tags `v*` solo a administradores):
+
+   ```bash
+   git switch main && git pull --ff-only
+   git tag -s v<x.y.z> -m "v<x.y.z>"
+   git tag -v v<x.y.z>                           # firma válida con la llave de firma del repositorio
+   git push origin v<x.y.z>
+   gh run watch "$(gh run list -R cloudfroghq/knowledge -w publish -e push -L1 --json databaseId --jq '.[0].databaseId')" -R cloudfroghq/knowledge --exit-status
+   ```
+
+5. Comprueba los tres canales (en una máquina o un directorio sin caché caliente si quieres probar la descarga):
+
+   ```bash
+   uvx --managed-python --python 3.12 cloudfrog-knowledge@<x.y.z> --version                     # cloudfrog-knowledge <x.y.z>
+   uvx --managed-python --python 3.12 --from cloudfrog-knowledge==<x.y.z> knowledge --version    # knowledge <x.y.z>
+   npx -y @cloudfrog/knowledge@<x.y.z> --version                                                # knowledge <x.y.z>
+   pnpm dlx @cloudfrog/knowledge@<x.y.z> --version
+   uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v<x.y.z> cloudfrog-knowledge --version
+   npm view @cloudfrog/knowledge@<x.y.z> dist.attestations                                       # procedencia (no la trae la primera versión)
+   ```
+
+### Si algo falla
+
+- **Antes de publicar** (versiones, sumas de `uv`, tests, wheel): no salió nada. Se corrige en un pull request y se corta un tag nuevo.
+- **PyPI rechaza el token** (`invalid-publisher`): el publicador no coincide con el dueño, repositorio, workflow o environment de la corrida. Corrígelo en PyPI y vuelve a correr el job: `gh run rerun <id> -R cloudfroghq/knowledge --failed`.
+- **npm falla con PyPI ya publicado** (por ejemplo, el trusted publisher no estaba configurado): corrígelo y vuelve a correr el job fallido; PyPI responde `200` y se salta, y npm publica.
+- **Una versión a medias en PyPI** (subió el wheel y no el sdist): una corrida nueva la ve publicada y se salta, así que el sdist ya no sube. `uv` y `pip` instalan desde el wheel; si el sdist hace falta, se publica un parche.
+- **Una versión publicada con un defecto**: ni PyPI ni npm dejan volver a publicarla. Se corta un parche (`X.Y.Z+1`); en npm, `npm deprecate @cloudfrog/knowledge@<x.y.z> "<motivo>"`, y en PyPI se marca como *yanked* desde la página del proyecto.
+
+## 8. Seguimiento
 
 ### Ruta del tag en `release-check`
 

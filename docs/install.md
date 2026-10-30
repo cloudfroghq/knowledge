@@ -54,6 +54,23 @@ export CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1 && claude plugin marketplace add cloudf
 
 Comprobación: `curl -s https://<despliegue>/health` responde `status: ok` con `contract_version`, y `/mcp` dentro de Claude Code muestra `plugin:knowledge-remote:knowledge` y `plugin:memory:memory` conectados.
 
+## Instalar el CLI
+
+`init`, `doctor`, `vault-lint` y el resto de los subcomandos se corren desde tu terminal. El mismo paquete se publica por tres canales, siempre con la misma versión:
+
+| Canal | Instalar una vez | Correr sin instalar |
+|---|---|---|
+| PyPI (`cloudfrog-knowledge`) | `uv tool install --managed-python --python 3.12 cloudfrog-knowledge` | `uvx --managed-python --python 3.12 cloudfrog-knowledge <subcomando>` |
+| npm (`@cloudfrog/knowledge`) | `npm install -g @cloudfrog/knowledge` | `npx @cloudfrog/knowledge <subcomando>` o `pnpm dlx @cloudfrog/knowledge <subcomando>` |
+| Tag de git | `uv tool install --managed-python --python 3.12 git+https://github.com/cloudfroghq/knowledge.git@v0.8.0` | `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v0.8.0 cloudfrog-knowledge <subcomando>` |
+
+- Cada instalación deja dos comandos que son el mismo programa: `knowledge` y `cloudfrog-knowledge`. El uso (`--help`), `--version` y las pistas de `doctor` e `init` nombran el que corriste; `KNOWLEDGE_COMMAND_LABEL` sigue mandando sobre ambos (ver el README, «Etiqueta del comando en las pistas»).
+- `--managed-python --python 3.12`: el paquete declara `requires-python >=3.12,<3.13`, pero `uv` ignora el tope al elegir intérprete y, sin `--python`, usaría el primer Python más nuevo que encuentre. El CPython gestionado por `uv` además carga `sqlite-vec` (ver Prerrequisitos).
+- El paquete de npm no trae Python: en la primera corrida descarga `uv` 0.10.4 de su release en GitHub, comprueba su SHA-256 contra la suma que viene dentro del paquete, lo guarda en `~/.cache/cloudfrog-knowledge/uv/` (`%LOCALAPPDATA%` en Windows) y corre `uv tool run --managed-python --python 3.12 --from cloudfrog-knowledge==<versión> <comando>`. Funciona en macOS (arm64, x64), Linux (x64, arm64; glibc o musl) y Windows (x64, arm64). Detrás de un proxy que Node no atraviesa, apunta `CLOUDFROG_KNOWLEDGE_UV` a un `uv` que ya tengas. Un fallo del paquete antes de arrancar el CLI imprime `<código>: <mensaje>` en stderr y sale con 2.
+- Fija la versión cuando la uses desde un script o un `.mcp.json`: `cloudfrog-knowledge==0.8.0` (o `uvx … cloudfrog-knowledge@0.8.0`), `npx @cloudfrog/knowledge@0.8.0` o el tag `@v0.8.0`.
+
+Comprobación: `knowledge --version` (o `npx @cloudfrog/knowledge --version`) imprime `knowledge 0.8.0`; `knowledge doctor` diagnostica la instalación con tus vaults.
+
 ## Inicializar el cliente
 
 Un vault que declara `Contexts/config.json` trae el paquete de contexto de cada aplicación (`Contexts/<app>/`: `CLAUDE.md`, `.mcp.json` y `.claude/`). Enlazarlo en tus checkouts es trabajo de tu máquina, nunca del servidor: un despliegue remoto no ve tu disco. Con tus vaults ya registrados (`~/.config/knowledge/vaults.yaml`):
@@ -80,6 +97,8 @@ Cada máquina elige en qué checkouts instala un paquete: la lista `apply` de su
 - `link` es el único modo recomendado: el paquete vive en el vault y cada checkout lo ve tal cual. `copy` sigue funcionando para un vault que todavía lo declara, pero ningún caso lo exige.
 - Un `.claude` que en el checkout es un **directorio real** (Claude Code crea sus worktrees en `<checkout>/.claude/worktrees/` y no acepta un `.claude` enlazado) sigue siendo real: `init` enlaza dentro de él cada entrada del `.claude` del paquete (`agents`, `commands`, `skills`, `settings.json`…) y nunca toca lo que el paquete no trae (`settings.local.json`, `agent-memory/`, `worktrees/`). Una entrada real sin versionar es un conflicto que `--force` aparta dentro del mismo `.claude`; un enlace que `init` hizo hacia un vault que se movió se reenlaza solo. Las entradas de ignorado nombran cada enlace (`/.claude/agents`), nunca el directorio real.
 - Lo que el checkout **versiona en git** es suyo: un `CLAUDE.md` o `.mcp.json` versionado, o una entrada de `.claude/` versionada, se conserva con el aviso «owned by the checkout», sin conflicto y sin cambiar el código de salida. Un `.claude/<colección>/` versionado (por ejemplo `.claude/skills/` con una skill del repositorio) recibe además las entradas del paquete que le faltan; más abajo, una skill o un agente es una unidad y no se mezcla.
+
+`cloudfrog-knowledge` en estos ejemplos es cualquiera de las formas de «Instalar el CLI»: `knowledge`, `uvx … cloudfrog-knowledge` o `npx @cloudfrog/knowledge`.
 
 Un vault que no tiene aplicaciones que enlazar declara `"repos": {"roots": [], "entries": []}` (y `"graph": {"targets": []}`) en su `Contexts/config.json`: `init` lo reporta como `no-apps`, no escribe nada y sale 0, y `doctor` no lo cuenta como `init pending`. Un `roots` o `entries` que no sea un arreglo, o una entrada mal formada, sigue siendo `E_CONTEXTS_INVALID`; el registro vacío solo es válido en la declaración de un vault.
 
