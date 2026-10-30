@@ -4,7 +4,7 @@ Tres perfiles, una línea cada uno. Todos salen del marketplace público `cloudf
 
 | Plugin | Qué sirve | Prefijo de sus tools | Para quién |
 |---|---|---|---|
-| `knowledge@cloudfroghq` | Este servidor por stdio, lanzado con `uvx` desde el repositorio privado | `mcp__plugin_knowledge_knowledge__` | Quien tiene acceso al código y sus vaults en disco |
+| `knowledge@cloudfroghq` | Este servidor por stdio, lanzado con `uvx` desde el tag del repositorio público | `mcp__plugin_knowledge_knowledge__` | Quien tiene sus vaults en disco |
 | `knowledge-remote@cloudfroghq` | El servidor HTTP del despliegue de tu organización | `mcp__plugin_knowledge-remote_knowledge__` | Quien no tiene acceso al código |
 | `memory@cloudfroghq` | Memoria de sesión (binario `memory`) | `mcp__plugin_memory_memory__` | Todos |
 
@@ -16,7 +16,7 @@ Tres perfiles, una línea cada uno. Todos salen del marketplace público `cloudf
 - Para `knowledge` (stdio):
   - `uv` (`brew install uv`) con un CPython de `uv`: el plugin lanza el servidor con `uvx --managed-python --python 3.12`, que descarga un Python 3.12 gestionado la primera vez si no lo tienes. Hace falta porque `sqlite-vec`, la extensión que ordena los vectores, solo carga en un Python con extensiones habilitadas, y el de python.org para macOS no las trae. Sin ella el servidor sigue funcionando: ordena los vectores con la biblioteca estándar (`vector_backend: python` en `doctor` y `/health`, unos 110 ms por consulta en lugar de unos 10) y da el mismo resultado; solo cambia la velocidad. `KNOWLEDGE_REQUIRE_SQLITE_VEC=1` convierte ese respaldo en el error `E_SQLITE_VEC_UNAVAILABLE`. `uvx` tiene que resolverse desde el entorno con el que arranca Claude Code. Si lo abres desde el Dock y no hereda tu `PATH`, define `UVX_BIN` con la ruta absoluta (`/opt/homebrew/bin/uvx`).
   - `bash` en el `PATH` para el hook de inicio de sesión del plugin (`#!/usr/bin/env bash`): el tope de 8 segundos del doctor necesita control de trabajos sin terminal, que `dash` (el `/bin/sh` de Debian y Ubuntu) no da. macOS y las distribuciones de escritorio lo traen; Alpine no lo trae por omisión (`apk add bash`). Sin `bash` el hook no arranca, pero el servidor MCP no depende de él: solo se pierde el aviso de `doctor --brief`.
-  - Una llave SSH con acceso de lectura a `cloudfroghq/knowledge`, cargada en `ssh-agent` y sin passphrase interactiva: `uvx` clona el tag por `git+ssh` en cada arranque. `ssh -T git@github.com` debe saludarte por tu usuario.
+  - Acceso a `github.com` por HTTPS: `uvx` trae el tag del repositorio público por `git+https`, sin llave SSH ni credenciales.
   - Un registro de vaults en `~/.config/knowledge/vaults.yaml` (o el archivo que elijas en la opción `vaults_config`). El formato está en [`runbooks/servir-varios-vaults.md`](runbooks/servir-varios-vaults.md).
   - `OPENAI_API_KEY` en el entorno de la sesión si algún vault usa el proveedor `openai`. Una variable definida solo en la configuración de tu shell no llega a Claude Code abierto desde el Dock; ahí hace falta `launchctl setenv` (o un LaunchAgent que lo haga al iniciar sesión), o el proveedor `none`.
 - Para `memory`: el binario `memory` en el `PATH` (abajo, con Homebrew o sin él).
@@ -24,7 +24,7 @@ Tres perfiles, una línea cada uno. Todos salen del marketplace público `cloudf
 ## Con acceso al código (stdio con tus vaults)
 
 ```bash
-claude plugin marketplace add cloudfroghq/claude-plugins && claude plugin install knowledge@cloudfroghq --scope user && claude plugin install memory@cloudfroghq --scope user && uvx --managed-python --python 3.12 --from 'git+ssh://git@github.com/cloudfroghq/knowledge.git@v0.8.0' cloudfrog-knowledge doctor && memory setup claude-code
+claude plugin marketplace add cloudfroghq/claude-plugins && claude plugin install knowledge@cloudfroghq --scope user && claude plugin install memory@cloudfroghq --scope user && uvx --managed-python --python 3.12 --from 'git+https://github.com/cloudfroghq/knowledge.git@v0.9.0' cloudfrog-knowledge doctor && memory setup claude-code
 ```
 
 - El `uvx … doctor` del final **precalienta la caché** de `uv` (el primer arranque clona el tag, descarga unos 15 MB de dependencias y, si hace falta, el Python gestionado, y puede tardar más que los 30 s que Claude Code espera por omisión a un servidor MCP) y diagnostica la instalación: sale con 0 si todo está bien.
@@ -62,14 +62,14 @@ Comprobación: `curl -s https://<despliegue>/health` responde `status: ok` con `
 |---|---|---|
 | PyPI (`cloudfrog-knowledge`) | `uv tool install --managed-python --python 3.12 cloudfrog-knowledge` | `uvx --managed-python --python 3.12 cloudfrog-knowledge <subcomando>` |
 | npm (`@cloudfrog/knowledge`) | `npm install -g @cloudfrog/knowledge` | `npx @cloudfrog/knowledge <subcomando>` o `pnpm dlx @cloudfrog/knowledge <subcomando>` |
-| Tag de git | `uv tool install --managed-python --python 3.12 git+https://github.com/cloudfroghq/knowledge.git@v0.8.0` | `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v0.8.0 cloudfrog-knowledge <subcomando>` |
+| Tag de git | `uv tool install --managed-python --python 3.12 git+https://github.com/cloudfroghq/knowledge.git@v0.9.0` | `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v0.9.0 cloudfrog-knowledge <subcomando>` |
 
 - Cada instalación deja dos comandos que son el mismo programa: `knowledge` y `cloudfrog-knowledge`. El uso (`--help`), `--version` y las pistas de `doctor` e `init` nombran el que corriste; `KNOWLEDGE_COMMAND_LABEL` sigue mandando sobre ambos (ver el README, «Etiqueta del comando en las pistas»).
 - `--managed-python --python 3.12`: el paquete declara `requires-python >=3.12,<3.13`, pero `uv` ignora el tope al elegir intérprete y, sin `--python`, usaría el primer Python más nuevo que encuentre. El CPython gestionado por `uv` además carga `sqlite-vec` (ver Prerrequisitos).
 - El paquete de npm no trae Python: en la primera corrida descarga `uv` 0.10.4 de su release en GitHub, comprueba su SHA-256 contra la suma que viene dentro del paquete, lo guarda en `~/.cache/cloudfrog-knowledge/uv/` (`%LOCALAPPDATA%` en Windows) y corre `uv tool run --managed-python --python 3.12 --from cloudfrog-knowledge==<versión> <comando>`. Funciona en macOS (arm64, x64), Linux (x64, arm64; glibc o musl) y Windows (x64, arm64). Detrás de un proxy que Node no atraviesa, apunta `CLOUDFROG_KNOWLEDGE_UV` a un `uv` que ya tengas. Un fallo del paquete antes de arrancar el CLI imprime `<código>: <mensaje>` en stderr y sale con 2.
-- Fija la versión cuando la uses desde un script o un `.mcp.json`: `cloudfrog-knowledge==0.8.0` (o `uvx … cloudfrog-knowledge@0.8.0`), `npx @cloudfrog/knowledge@0.8.0` o el tag `@v0.8.0`.
+- Fija la versión cuando la uses desde un script o un `.mcp.json`: `cloudfrog-knowledge==0.9.0` (o `uvx … cloudfrog-knowledge@0.9.0`), `npx @cloudfrog/knowledge@0.9.0` o el tag `@v0.9.0`.
 
-Comprobación: `knowledge --version` (o `npx @cloudfrog/knowledge --version`) imprime `knowledge 0.8.0`; `knowledge doctor` diagnostica la instalación con tus vaults.
+Comprobación: `knowledge --version` (o `npx @cloudfrog/knowledge --version`) imprime `knowledge 0.9.0`; `knowledge doctor` diagnostica la instalación con tus vaults.
 
 ## Inicializar el cliente
 
@@ -246,9 +246,9 @@ Con `knowledge-remote`, actualiza `knowledge-remote@cloudfroghq` en lugar de `kn
 
 ## Diagnóstico
 
-- `knowledge` (stdio): `uvx --managed-python --python 3.12 --from 'git+ssh://git@github.com/cloudfroghq/knowledge.git@v0.8.0' cloudfrog-knowledge doctor` imprime un JSON con la regla que eligió el registro de vaults, el estado de cada vault (directorio, proveedor, si la clave está definida sin mostrarla, si hay índice), si `KNOWLEDGE_HOME` se puede escribir y las versiones del paquete y del contrato. El hook de inicio de sesión del plugin corre la versión breve y solo habla cuando algo falla, con una línea de hasta 200 bytes sin contar el salto de línea (el tope de `doctor --brief`).
+- `knowledge` (stdio): `uvx --managed-python --python 3.12 --from 'git+https://github.com/cloudfroghq/knowledge.git@v0.9.0' cloudfrog-knowledge doctor` imprime un JSON con la regla que eligió el registro de vaults, el estado de cada vault (directorio, proveedor, si la clave está definida sin mostrarla, si hay índice), si `KNOWLEDGE_HOME` se puede escribir y las versiones del paquete y del contrato. El hook de inicio de sesión del plugin corre la versión breve y solo habla cuando algo falla, con una línea de hasta 200 bytes sin contar el salto de línea (el tope de `doctor --brief`).
 - Si un vault declara en `features` una extensión sin sus credenciales (por ejemplo `confluence` sin `CONFLUENCE_EMAIL` y `CONFLUENCE_TOKEN`, o los nombres que fije `integrations.confluence.secrets` en su `vault.yaml`), el servidor stdio arranca igual y deja `W_EXTENSION_UNCONFIGURED` en su log con los nombres de las variables que faltan; solo esa extensión responde con error.
 - `CONFLUENCE_URL` es la raíz del sitio de Atlassian (`https://<org>.atlassian.net`), **sin** `/wiki`: el cliente de este servidor añade `/wiki/api/v2/...` por su cuenta. Con `/wiki` al final cada página responde 404 y `sync_confluence` y `confluence export` las cuentan todas en `errors`. La misma regla se aplica a `integrations.confluence.site` del `vault.yaml`. El `CONFLUENCE_URL` de `mcp-atlassian` es otra variable, de otro proceso, y ese sí lleva `/wiki`.
 - Un servidor en estado `failed` en `/mcp` con el doctor en verde suele ser tiempo de arranque: sube `MCP_TIMEOUT` o vuelve a precalentar la caché.
-- Sin red, el servidor stdio no arranca: `uvx` consulta el tag por SSH en cada inicio.
+- Sin red, el servidor stdio no arranca: `uvx` consulta el tag en GitHub en cada inicio.
 - Si `uvx` no logra ni arrancar el paquete (sin red, o un tag que el remoto no tiene), el doctor no llega a decir nada y el hook lo avisa con `knowledge: server package failed (uvx rc N); diagnose: …` **una vez por día y por versión del plugin**, no en cada arranque. La marca es un archivo de una línea, `${XDG_CACHE_HOME:-$HOME/.cache}/knowledge/session-start-package-failed`: borrarlo hace que el aviso vuelva en el siguiente arranque, y si no se puede escribir el aviso sale en todos. Entre un aviso y otro el servidor sigue apareciendo como `failed` en `/mcp`. Reintentar con `uvx --offline` no ayuda: con uv 0.10 un tag git se consulta en el remoto incluso con esa bandera. Un doctor que no contesta en 8 segundos (caché fría) no avisa; lo hará el arranque siguiente.

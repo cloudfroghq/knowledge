@@ -1,6 +1,6 @@
 [project]
 name = "cloudfrog-knowledge"
-version = "0.8.0"
+version = "0.9.0"
 description = "MCP server providing semantic search over an Obsidian documentation vault"
 license = "LicenseRef-PolyForm-Shield-1.0.0"
 license-files = ["LICENSE"]
