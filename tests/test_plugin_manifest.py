@@ -32,7 +32,7 @@ MCP_JSON = PLUGIN / ".mcp.json"
 HOOKS = PLUGIN / "hooks" / "hooks.json"
 HOOK_SCRIPT = PLUGIN / "scripts" / "session-start.sh"
 
-PACKAGE_SOURCE = "git+ssh://git@github.com/cloudfroghq/knowledge.git"
+PACKAGE_SOURCE = "git+https://github.com/cloudfroghq/knowledge.git"
 TOOL_PREFIX = "mcp__plugin_knowledge_knowledge__"
 MEMORY_PREFIX = "mcp__plugin_memory_memory__"
 #: The prefix of the retired ``cloudfrog@cloudfrog`` install of memory. Nothing
@@ -313,7 +313,7 @@ def test_the_hook_forwards_one_bounded_line_on_a_problem(tmp_path: Path) -> None
 
 _PACKAGE_FAILS = "echo 'git operation failed' >&2\nexit 2\n"
 _FAILED_PREFIX = (
-    "knowledge: server package failed (uvx rc 2); diagnose: uvx --managed-python --python 3.12 --from 'git+ssh://"
+    "knowledge: server package failed (uvx rc 2); diagnose: uvx --managed-python --python 3.12 --from 'git+https://"
 )
 
 
@@ -363,7 +363,7 @@ def test_the_marker_follows_xdg_cache_home(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "stale",
-    ["19990101 {spec}", "{today} git+ssh://git@github.com/cloudfroghq/knowledge.git@v0.0.1", ""],
+    ["19990101 {spec}", "{today} git+https://github.com/cloudfroghq/knowledge.git@v0.0.1", ""],
     ids=["another-day", "another-release", "empty"],
 )
 def test_a_stale_marker_reports_again(tmp_path: Path, stale: str) -> None:

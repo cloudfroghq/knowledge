@@ -74,6 +74,14 @@ Rompedora y declarada. Cada cambio de forma, default, nombre o código es una fi
 - El retiro del perfil `legacy` y de `search_code` del todo: en 2.1.0, cuando la telemetría de llamadas de la ventana muestre cero llamadas fuera de las sondas registradas (`_meta` de R21).
 - Sin cambio desde 1.3.0 y 1.1.0: Jira por HTTP, el override personal de `integrations.jira` y `context_pack(task=…)`.
 
+### Paquete 0.9.0 (contrato sin cambios)
+
+Publicado como `cloudfrog-knowledge` 0.9.0 (tag `v0.9.0`), la primera versión en PyPI y en npm (`@cloudfrog/knowledge`). El contrato sigue en 2.0.0: ninguna tool cambia de forma y los goldens de `tests/golden/v2.0.0/` no se mueven. Lo que cambia es el paquete:
+
+- Tres canales con la misma versión (ADR-050): el tag (`uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v0.9.0 cloudfrog-knowledge`), PyPI (`uvx --managed-python --python 3.12 cloudfrog-knowledge` o `uv tool install --managed-python --python 3.12 cloudfrog-knowledge`) y npm (`npx @cloudfrog/knowledge` o `pnpm dlx @cloudfrog/knowledge`), que no tiene dependencias: descarga `uv` 0.10.4, lo verifica contra el SHA-256 que trae el paquete y corre con él la versión de PyPI. `publish.yml` publica cada tag `v*` por trusted publishing.
+- Un segundo console script, `knowledge`, igual a `cloudfrog-knowledge`, y la bandera `--version`. El uso, `--version` y las pistas de `doctor` e `init` nombran el comando que corrió; `KNOWLEDGE_COMMAND_LABEL` sigue mandando sobre los dos.
+- El plugin `knowledge` y la documentación instalan desde `git+https://github.com/cloudfroghq/knowledge.git@v0.9.0`: el repositorio es público y ya no hace falta una llave SSH.
+
 ### Paquete 0.8.0 (contrato sin cambios)
 
 Publicado como `cloudfrog-knowledge` 0.8.0 (tag `v0.8.0`). El contrato sigue en 2.0.0: ninguna tool cambia de forma y los goldens de `tests/golden/v2.0.0/` no se mueven. Lo que cambia es el paquete:

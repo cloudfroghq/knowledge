@@ -1,6 +1,6 @@
 {
   "name": "@cloudfrog/knowledge",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Knowledge MCP server and vault tooling (cloudfrog-knowledge), run through a pinned uv",
   "keywords": [
     "mcp",
