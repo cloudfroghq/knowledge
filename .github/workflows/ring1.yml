@@ -23,7 +23,8 @@
 # GitHub-owned actions.
 #
 # The stack is Python: uv for dependency resolution from the committed uv.lock,
-# ruff for lint, pytest for the suite, and diff coverage on the patch rather
+# ruff for lint, pytest for the suite (the suite job also runs the npm
+# wrapper's `node --test`), and diff coverage on the patch rather
 # than a repository-wide floor (ADR-005 — a global minimum on a codebase with
 # historical debt is either unreachable or met with tests that assert nothing).
 # Thresholds are not written here: they live in pyproject.toml
@@ -119,6 +120,14 @@ jobs:
         with:
           name: coverage
           path: build/coverage.xml
+      # The npm wrapper (npm/): node --test, no dependencies to install and no
+      # network; a few seconds. Its real download of uv runs in publish.yml.
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+      - name: Test the npm wrapper
+        working-directory: npm
+        run: npm test
 
   image:
     # Builds the Dockerfile on amd64, the deployments' architecture, and runs
