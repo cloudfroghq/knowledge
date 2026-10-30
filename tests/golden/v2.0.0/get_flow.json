@@ -1,0 +1,1 @@
+{"content":[{"text":"{\"provider\":\"Telvia\",\"file\":\"Flows/Flow - Telvia.md\",\"steps\":[\"User submits phone number\",\"Send OTP via SMS\",\"Validate OTP\",\"Create session\"],\"shared_login_steps\":[\"Issue access token\",\"Issue refresh token\"]}","type":"text"}],"isError":false}

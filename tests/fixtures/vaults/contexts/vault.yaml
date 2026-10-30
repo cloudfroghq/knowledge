@@ -1,0 +1,4 @@
+slug: contexts
+knowledge_contract: ">=2.0,<3"
+memory:
+  export_folder: "90 - Memory"

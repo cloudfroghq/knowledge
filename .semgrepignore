@@ -1,0 +1,5 @@
+# Backup/editor artifacts are not shipped code; scanning them duplicates
+# findings already raised (or already fixed) against the real file next to
+# them, and any suppression comment added there would need to be kept in
+# sync with a file nobody runs.
+*.bak

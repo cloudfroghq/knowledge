@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.venv
+.data
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.DS_Store
+scripts/
+README.md
+.claude/
+lab/

@@ -1,0 +1,26 @@
+# .graphifyignore REPLACES .gitignore for graphify's scan, it does not merge with it.
+# Every artifact/vendor rule from .gitignore that must also stay out of the graph is duplicated here.
+.env
+.env.*
+__pycache__/
+*.pyc
+.venv/
+dist/
+*.egg-info/
+.data/
+*.log
+.codex/
+.idea/
+.ruff_cache/
+cleanup-evidence/
+graphify-out/
+.git/
+
+# Obsidian vault content: large non-code corpus, kept out of the code graph on purpose.
+# Revisit if the team wants a merged code+docs graph for this repo.
+vault/
+# Snapshots de ChromaDB: 1,1 GB de indices que dominaban los god nodes.
+.data.bak-*/
+# Platform code graph: merged-graph.json is 132.3 MiB (138.7 MB) of fused per-repo
+# graphs. Left out of this repo's own graph on purpose, the way a vendored blob is.
+platform-graph/

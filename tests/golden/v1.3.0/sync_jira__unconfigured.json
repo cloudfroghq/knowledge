@@ -1,0 +1,1 @@
+{"content":[{"text":"Error executing tool sync_jira: E_SECRET_MISSING: cloudfrog: the jira extension needs CLOUDFROG_JIRA_EMAIL, CLOUDFROG_JIRA_TOKEN; export them in the environment of this process","type":"text"}],"isError":true}

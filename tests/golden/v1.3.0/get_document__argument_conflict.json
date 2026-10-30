@@ -1,0 +1,1 @@
+{"content":[{"text":"Error executing tool get_document: E_ARGUMENT_CONFLICT: chunk_id names a block on its own; drop section, start_line and end_line","type":"text"}],"isError":true}

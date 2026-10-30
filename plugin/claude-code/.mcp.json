@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "knowledge": {
+      "type": "stdio",
+      "command": "${UVX_BIN:-uvx}",
+      "args": [
+        "--managed-python",
+        "--python",
+        "3.12",
+        "--from",
+        "git+ssh://git@github.com/cloudfroghq/knowledge.git@v0.8.0",
+        "cloudfrog-knowledge",
+        "serve",
+        "--transport",
+        "stdio"
+      ],
+      "env": {
+        "KNOWLEDGE_VAULTS": "${user_config.vaults_config}",
+        "KNOWLEDGE_EMBEDDINGS_PROVIDER": "${user_config.embeddings_provider}"
+      }
+    }
+  }
+}

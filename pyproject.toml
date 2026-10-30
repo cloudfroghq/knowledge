@@ -1,0 +1,147 @@
+[project]
+name = "cloudfrog-knowledge"
+version = "0.8.0"
+description = "MCP server providing semantic search over an Obsidian documentation vault"
+license = "LicenseRef-PolyForm-Shield-1.0.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mcp[cli]>=1.27,<2",
+    "openai",
+    "python-frontmatter",
+    "python-dotenv",
+    # vaults.yaml and each vault's vault.yaml.
+    "pyyaml>=6,<7",
+    # Vector search inside each vault's SQLite index (vec0, KNN with k = ?).
+    # Pinned exactly: the on-disk virtual table format is the extension's own.
+    "sqlite-vec==0.1.9",
+]
+
+[project.scripts]
+cloudfrog-knowledge = "knowledge.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/knowledge"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src/knowledge", "pyproject.toml", "README.md", "LICENSE"]
+
+[dependency-groups]
+# Pinned exactly, not floored: a gate whose tools float is a gate that can
+# turn red overnight on a rule someone else shipped. Raising a pin is a
+# deliberate change with its own pull request.
+dev = [
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "diff-cover==10.5.1",
+    "ruff==0.16.6",
+    # tests/test_pipeline_contract.py parses the GitHub workflows with a real
+    # YAML parser rather than matching text. Pinned here even though the runtime
+    # already declares pyyaml: the gate's version is the one this group fixes,
+    # not whatever the runtime range resolves to.
+    "pyyaml==6.0.3",
+    # Stubs for the yaml import in knowledge.settings, so mypy --strict reads
+    # its types instead of reporting an untyped import.
+    "types-PyYAML==6.0.12.20260906",
+    "import-linter==2.15",
+    "mypy==2.4.0",
+    # Token counts in the retrieval evaluation and the token meter
+    # (scripts/eval_retrieval.py, scripts/measure_tokens.py). cl100k_base is
+    # the encoding of the embedding model the deployments use. Development
+    # only: the server never counts tokens.
+    "tiktoken==0.14.0",
+]
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+# --strict-markers: a typo in a marker name is an error, not a silent skip.
+# --strict-config:  a typo in this table is an error, not a silent default.
+# -m "not image":   the image tests build the Dockerfile, which takes minutes;
+#                   they run on their own with `uv run pytest -m image` (a -m
+#                   on the command line replaces this one).
+addopts = "-ra --strict-markers --strict-config -m \"not image\""
+markers = [
+    "slow: long-running (sdist and wheel build, golden replay under a random hash seed); part of the full suite, deselect with -m \"not slow\"",
+    "image: builds the container image from the Dockerfile and checks it with docker; outside the default run, select with -m image",
+]
+filterwarnings = [
+    "error::RuntimeWarning",
+    # A coroutine that is never awaited is the exact defect class that left
+    # two tools returning "<coroutine object>" to real callers: never a warning.
+    "error:coroutine .* was never awaited",
+    "ignore::DeprecationWarning",
+]
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+
+[tool.coverage.run]
+source = ["src/knowledge"]
+branch = true
+omit = ["*/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "except ImportError:",
+    "@overload",
+]
+
+[tool.coverage.xml]
+output = "build/coverage.xml"
+
+# Coverage is gated on the patch, not on the repository total: a global floor
+# on a codebase with historical debt is either unreachable or met with tests
+# that assert nothing. The number below is what a pull request has to clear on
+# the lines it actually touches.
+[tool.diff_cover]
+compare_branch = "origin/main"
+fail_under = 80
+include_untracked = false
+
+[tool.diff_cover.diff_quality]
+compare_branch = "origin/main"
+fail_under = 80
+
+# ---------------------------------------------------------------------------
+# Lint
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".data", "ops"]
+
+[tool.ruff.lint]
+# The selected families are the ones the tree passes clean today, so ring 0
+# and ring 1 start green and every finding after this is a real regression.
+# Import sorting ("I") is deliberately still out: enabling it would flag four
+# pre-existing blocks and turn the gate red on its first run.
+select = ["E", "W", "F", "UP", "C4"]
+# Deferred, not waived. Each entry is green-lit to remove once the listed work
+# lands; leaving them selected today would open ring 1 red, which trains people
+# to ignore it.
+ignore = [
+    # UP017 (datetime.UTC over timezone.utc): four call sites across
+    # confluence_sync, indexer, usage and webhook. Mechanical and safe, but the
+    # modules are under concurrent edit; sequence it as its own change.
+    "UP017",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixtures and doubles read better with the assertion inline.
+"tests/*" = ["E501"]

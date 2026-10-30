@@ -1,0 +1,61 @@
+# Labeled retrieval set over the test fixture vault (tests/fixtures/vault/).
+# It exercises the evaluation harness, not retrieval quality: the suite embeds
+# with the bag-of-words double, so its numbers say nothing about the real vault.
+# Paths are relative to the fixture vault root; labels come from reading the
+# fixture documents.
+version: 1
+vault: fixture
+k: 5
+queries:
+  - id: fx-001
+    lang: en
+    query: "middleware outage runbook"
+    expected:
+      - "Runbooks/Runbook - Middleware Outage.md"
+  - id: fx-002
+    lang: es
+    query: "¿Qué hago si el middleware tiene un outage?"
+    expected:
+      - "Runbooks/Runbook - Middleware Outage.md"
+      - "Services/Middleware Service.md"
+  - id: fx-003
+    lang: en
+    query: "how is the OTP login flow for Telvia in Mexico"
+    expected:
+      - "Flows/Flow - Telvia.md"
+  - id: fx-004
+    lang: es
+    query: "flujo de OTP de Comet Argentina"
+    expected:
+      - "Flows/Flow - Comet Argentina.md"
+  - id: fx-005
+    lang: en
+    query: "how are access and refresh tokens rotated in a session"
+    expected:
+      - "Architecture/Session Architecture.md"
+      - "Flows/Successful Login Flow.md"
+  - id: fx-006
+    lang: es
+    query: "¿Cómo se emite el OTP y se crea la session?"
+    expected:
+      - "Architecture/Auth Architecture.md"
+  - id: fx-007
+    lang: en
+    query: "which service is the portal web UI"
+    expected:
+      - "Services/Portal Service.md"
+  - id: fx-008
+    lang: es
+    query: "servicio lookup que resuelve la identidad"
+    expected:
+      - "Services/Lookup Service.md"
+  - id: fx-009
+    lang: en
+    query: "api gateway for auth payments and subscriptions"
+    expected:
+      - "Services/Middleware Service.md"
+  - id: fx-010
+    lang: es
+    query: "login exitoso con token de acceso"
+    expected:
+      - "Flows/Successful Login Flow.md"

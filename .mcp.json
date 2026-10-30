@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "memory": {
+      "type": "stdio",
+      "command": "${MEMORY_BIN:-memory}",
+      "args": [
+        "mcp",
+        "--tools=agent,projects,workspace"
+      ],
+      "env": {
+        "MEMORY_PROJECT": "knowledge",
+        "MEMORY_VAULT_ROOT": "${HOME}/.cloudfrog",
+        "MEMORY_PROJECTS_SYNC": "1",
+        "MEMORY_CLOUD_AUTOSYNC": "1"
+      }
+    },
+    "graphify": {
+      "type": "stdio",
+      "command": "${GRAPHIFY_MCP_BIN:-/opt/homebrew/bin/graphify-mcp}",
+      "args": [
+        "${CLAUDE_PROJECT_DIR:-.}/graphify-out/graph.json",
+        "--transport",
+        "stdio"
+      ],
+      "env": {}
+    }
+  }
+}

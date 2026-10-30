@@ -1,0 +1,264 @@
+# Ring 1 (ADR-006): the merge gate for this repository. Ring 0
+# (.claude/hooks/run-gates.sh) is fast local feedback and can be bypassed by
+# pushing outside Claude Code; this workflow is the authoritative check.
+#
+# Triggers:
+#
+#   pull_request to main   Every job except the image. The protect-main
+#                          ruleset requires the five checks this event runs,
+#                          by job name, so a rename here is a ruleset change.
+#   push to main           Every job except diff coverage (the diff against
+#                          origin/main is empty after the merge). This is
+#                          where the image is built and smoke-tested.
+#   workflow_dispatch      Every job except diff coverage, on any ref:
+#                          `gh workflow run ring1.yml --ref <branch>`.
+#
+# No path filter on purpose: a required check that does not run blocks the pull
+# request forever. tests/test_pipeline_contract.py fails the suite if a trigger
+# is added or dropped, if the image job starts running on pull requests, or if
+# this file ever reads a secret.
+#
+# Every action is pinned to a full commit SHA with its release tag in a
+# trailing comment; the repository enforces SHA pinning and allows only
+# GitHub-owned actions.
+#
+# The stack is Python: uv for dependency resolution from the committed uv.lock,
+# ruff for lint, pytest for the suite, and diff coverage on the patch rather
+# than a repository-wide floor (ADR-005 — a global minimum on a codebase with
+# historical debt is either unreachable or met with tests that assert nothing).
+# Thresholds are not written here: they live in pyproject.toml
+# ([tool.diff_cover]), which is also what a developer runs against locally, so
+# the gate and the laptop cannot disagree.
+#
+# Scanner and installer versions are pinned, so a new upstream release cannot
+# silently change what the gate accepts. The Semgrep rule packs (p/python,
+# p/security-audit) are fetched on every run and are not pinned: a pull request
+# with no relevant change can turn red when the registry updates a rule.
+#
+# `Layered architecture: import-linter (ADR-022)` checks the contract in
+# .importlinter: src/knowledge/ is four layers with a unidirectional
+# dependency flow — indexer, graph, usage, server — over config as the
+# lowest shared layer. The contract fails the build the moment a commit points
+# one of those arrows the wrong way; it does not rearrange anything itself.
+#
+# Read the Semgrep job's zero correctly. It is not "the rules found nothing
+# to complain about": four findings are suppressed by audited `# nosemgrep`
+# comments with their rule id, and the rules still match those lines — the
+# Confluence client's dynamic urlopen, git's sha1 blob id in
+# promote-memories, the sha1 doc_id (contract 2.0) and the judge's direct
+# HTTPS connection. Delete a comment and the job goes back to blocking. Each
+# one is registered in tests/test_suppressions.py with the reason it is not
+# reachable and the behavioural test that pins that reason, so a suppression
+# that nobody declared fails the suite before it reaches this job.
+#
+# Semgrep scans only files tracked by git. In a workflow run that is the whole
+# checkout; on a laptop with uncommitted work it is not, so a local run can
+# report a smaller target count than CI.
+#
+# The suite must never reach the network or the production vault: it runs
+# against tests/fixtures/vault/ with the embeddings API stubbed (tests/conftest.py).
+# That is why no OPENAI_API_KEY is needed below, and why none must ever be
+# added as a repository secret for this workflow.
+#
+# The weekly review-decay report is a separate workflow (stale-report.yml) and
+# is never part of this gate.
+
+name: ring1
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ring1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint-and-test:
+    name: "Lint + pytest with coverage"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # A store that cannot load sqlite-vec fails instead of falling back to
+      # the standard library, so a green suite means the extension served the
+      # vectors (and the goldens are compared, not skipped). uv runs the suite
+      # on its own CPython, which is built with loadable SQLite extensions.
+      KNOWLEDGE_REQUIRE_SQLITE_VEC: "1"
+      UV_MANAGED_PYTHON: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          # The suite installs packages from PyPI and runs them; nothing in this
+          # job fetches or pushes, so the token does not stay in .git/config.
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/0.10.4/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+      # --frozen: resolve strictly from uv.lock. A lockfile that drifted from
+      # pyproject.toml fails here instead of resolving to something nobody tested.
+      - run: uv sync --frozen --all-groups
+      - run: uv run ruff check
+      - run: uv run pytest -q --cov --cov-report=xml --cov-report=term
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage
+          path: build/coverage.xml
+
+  image:
+    # Builds the Dockerfile on amd64, the deployments' architecture, and runs
+    # tests/test_image.py against it: sqlite-vec loads in the image's Python,
+    # FTS5 folds accents, migrate-index copies a Chroma directory's sidecars and
+    # the entrypoint migrates before it serves search over stdio. The default
+    # suite deselects these tests (addopts in pyproject.toml), so this job is
+    # where they run. The build downloads the runtime dependencies from uv.lock;
+    # the tests themselves use the fixture vault and the `none` provider.
+    #
+    # It runs on a push to main and on demand, never on a pull request: it is
+    # the slowest job, and it is not one of the checks protect-main requires.
+    name: "Image: build and smoke test (amd64)"
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      UV_MANAGED_PYTHON: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/0.10.4/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+      - run: uv sync --frozen --all-groups
+      # Without a Docker daemon tests/test_image.py skips every test and the job
+      # would be an empty green. Fail first instead.
+      - run: docker info >/dev/null
+      - run: uv run pytest -m image -q tests/test_image.py
+
+  lint-imports:
+    name: "Layered architecture: import-linter (ADR-022)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/0.10.4/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+      - run: uv sync --frozen --all-groups
+      - run: uv run lint-imports --config .importlinter --no-cache
+
+  secrets-scan:
+    name: "Secrets: gitleaks"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0 # --log-opts makes gitleaks walk history
+      # origin/main is not guaranteed to exist as a ref until it is fetched
+      # explicitly, and without it the range below silently scans nothing.
+      - run: git fetch origin +refs/heads/main:refs/remotes/origin/main
+      - run: curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
+      # The range is the commits this event brings, never the whole history
+      # (which carries findings triaged separately). The values reach the shell
+      # through env, not interpolated into the script.
+      - name: Scan the commits this event brings
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          case "$EVENT" in
+            pull_request) range="$BASE_SHA..$HEAD_SHA" ;;
+            push)
+              case "$BEFORE" in
+                0000000000000000000000000000000000000000|'') range="$SHA~1..$SHA" ;;
+                *) range="$BEFORE..$SHA" ;;
+              esac ;;
+            *) range="origin/main..HEAD" ;;
+          esac
+          echo "gitleaks range: $range"
+          ./gitleaks detect --no-banner --redact --source . --log-opts="$range" --exit-code 1
+
+  sast-semgrep:
+    name: "SAST: Semgrep CE"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install semgrep==1.175.0
+      - run: semgrep --config p/python --config p/security-audit --error --metrics=off src/ scripts/
+
+  diff-coverage:
+    name: "Diff coverage (threshold from pyproject.toml)"
+    # Only a pull request has a patch to measure: on a push to main the diff
+    # against origin/main is empty. A job skipped by `if` reports success.
+    if: github.event_name == 'pull_request'
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/0.10.4/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+      # diff-cover reads the diff from git, so the base branch has to be a real
+      # ref, not just a name the remote knows about.
+      - run: git fetch origin +refs/heads/main:refs/remotes/origin/main
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage
+          path: build
+      # Same pinned diff-cover the developer runs, straight from uv.lock.
+      - run: uv sync --frozen --all-groups
+      # -c pyproject.toml is what makes [tool.diff_cover] load-bearing: without
+      # it the thresholds in that file would be decorative and the gate would
+      # pass anything that compiles.
+      - run: uv run diff-cover build/coverage.xml -c pyproject.toml

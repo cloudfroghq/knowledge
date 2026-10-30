@@ -1,0 +1,21 @@
+graph TD
+    CC["Claude Code (MCP Client)<br/>HTTP + Bearer auth"]
+    CC -->|"https /mcp"| TRAEFIK["Reverse proxy (TLS)"]
+    TRAEFIK --> SERVER
+
+    subgraph CONTAINER["knowledge-mcp container"]
+        SERVER["server.py<br/>FastMCP streamable-http"]
+        SERVER --> AUTH["auth.py<br/>Bearer + HMAC middleware"]
+        SERVER --> WEBHOOK["webhook.py<br/>/webhook/reindex"]
+        SERVER --> CONFIG["config.py<br/>config.json + env"]
+        SERVER --> INDEXER["indexer.py<br/>chunks + embeddings"]
+        SERVER --> GRAPH["graph.py<br/>wiki-link graph"]
+    end
+
+    INDEXER --> INDEX[("index.sqlite<br/>FTS5 + sqlite-vec<br/>/data/index/&lt;slug&gt;")]
+    INDEXER --> OPENAI["OpenAI API<br/>text-embedding-3-large"]
+    GRAPH --> LINKGRAPH[("link_graph.json")]
+
+    GH["GitHub repo<br/>(vault privado)"] -->|webhook push| WEBHOOK
+    WEBHOOK -->|git pull| VAULT[("/data/vault-repo")]
+    INDEXER -.->|parse + embed| VAULT

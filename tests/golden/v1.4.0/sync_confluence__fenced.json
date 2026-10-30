@@ -1,0 +1,1 @@
+{"content":[{"text":"Error executing tool sync_confluence: E_WRITE_FENCED: sync_confluence writes nothing into a vault; run `cloudfrog-knowledge confluence export --vault <slug> --out <dir>` outside the vault and promote the files by pull request","type":"text"}],"isError":true}

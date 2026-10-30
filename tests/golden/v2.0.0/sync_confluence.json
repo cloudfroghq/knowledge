@@ -1,0 +1,1 @@
+{"content":[{"text":"Error executing tool sync_confluence: E_SECRET_MISSING: sync_confluence needs CONFLUENCE_URL, CONFLUENCE_EMAIL, CONFLUENCE_TOKEN; export them or declare them under integrations.confluence in the vault's vault.yaml","type":"text"}],"isError":true}

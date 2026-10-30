@@ -1,0 +1,84 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "deny": [
+      "Read(./infra/.env.server)",
+      "Read(./.env*)",
+      "Read(./**/usage_stats.json)",
+      "mcp__mcp-atlassian__jira_delete_issue"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash(git push *)|Bash(bkt pr create *)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/run-gates.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-secrets.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-vault-write.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash(*reindex*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/confirm-reindex-cost.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__mcp-atlassian__jira_transition_issue",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-jira-transition.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/remind-mem-save.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "model": "opus[1m]",
+  "effortLevel": "high",
+  "outputStyle": "mcp-contract-guardian",
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
+  "enabledMcpjsonServers": [
+    "cloudfrog-knowledge",
+    "memory",
+    "graphify",
+    "mcp-atlassian"
+  ]
+}

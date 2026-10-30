@@ -1,0 +1,1 @@
+{"content":[{"text":"E_TOOL_RETIRED: search_code was retired in contract 2.0.0; source code is not indexed here (ADR-039). Use `graphify explain <symbol>` and `graphify affected <file>` for relationships and impact, `graphify query <symbol>` only with a real symbol name, `rg` for literal text, and `search` or `search_deep` for intent in the vault.","type":"text"}],"isError":true}

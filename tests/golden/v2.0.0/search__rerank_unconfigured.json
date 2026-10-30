@@ -1,0 +1,1 @@
+{"content":[{"text":"Error executing tool search: E_RERANK_NOT_CONFIGURED: vault 'cloudfrog' declares no rerank.provider; omit rerank or ask the vault owner","type":"text"}],"isError":true}

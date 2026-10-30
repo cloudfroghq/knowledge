@@ -1,0 +1,1 @@
+{"content":[{"text":"Error executing tool find_path: E_FILE_NOT_IN_GRAPH: not in the link graph of vault 'cloudfrog': ['Nowhere/Ghost.md'] (no wiki-link reaches it and it links nowhere, or it is not a vault document); take file_path from a search row, vault-relative and without wikilink brackets","type":"text"}],"isError":true}

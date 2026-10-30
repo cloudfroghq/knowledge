@@ -1,0 +1,305 @@
+{
+ "source": "sizes measured over a 50-query evaluation set; pool: top 10 of a hybrid search with limit 20 (fetch 40), text-embedding-3-large index; up to 2 pointer blocks per document",
+ "queries": [
+  {
+   "id": "q-001",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 40494
+  },
+  {
+   "id": "q-002",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 39162
+  },
+  {
+   "id": "q-003",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 32666
+  },
+  {
+   "id": "q-004",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 35332
+  },
+  {
+   "id": "q-005",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 32068
+  },
+  {
+   "id": "q-006",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 36970
+  },
+  {
+   "id": "q-007",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 36901
+  },
+  {
+   "id": "q-008",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 37007
+  },
+  {
+   "id": "q-009",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 36747
+  },
+  {
+   "id": "q-010",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 39343
+  },
+  {
+   "id": "q-011",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 35205
+  },
+  {
+   "id": "q-012",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 39157
+  },
+  {
+   "id": "q-013",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 39725
+  },
+  {
+   "id": "q-014",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 37186
+  },
+  {
+   "id": "q-015",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 34114
+  },
+  {
+   "id": "q-016",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 38442
+  },
+  {
+   "id": "q-017",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 39404
+  },
+  {
+   "id": "q-018",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 37463
+  },
+  {
+   "id": "q-019",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 33886
+  },
+  {
+   "id": "q-020",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 39145
+  },
+  {
+   "id": "q-021",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 35888
+  },
+  {
+   "id": "q-022",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 40118
+  },
+  {
+   "id": "q-023",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 36401
+  },
+  {
+   "id": "q-024",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 24018
+  },
+  {
+   "id": "q-025",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 24636
+  },
+  {
+   "id": "q-026",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 23046
+  },
+  {
+   "id": "q-027",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 24129
+  },
+  {
+   "id": "q-028",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 34872
+  },
+  {
+   "id": "q-029",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 27356
+  },
+  {
+   "id": "q-030",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 22125
+  },
+  {
+   "id": "q-031",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 28287
+  },
+  {
+   "id": "q-032",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 27183
+  },
+  {
+   "id": "q-033",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 22851
+  },
+  {
+   "id": "q-034",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 29879
+  },
+  {
+   "id": "q-035",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 23708
+  },
+  {
+   "id": "q-036",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 25813
+  },
+  {
+   "id": "q-037",
+   "lang": "en",
+   "units": 20,
+   "state_chars": 23068
+  },
+  {
+   "id": "q-038",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 34187
+  },
+  {
+   "id": "q-039",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 31166
+  },
+  {
+   "id": "q-040",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 30996
+  },
+  {
+   "id": "q-041",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 34502
+  },
+  {
+   "id": "q-042",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 30021
+  },
+  {
+   "id": "q-043",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 36267
+  },
+  {
+   "id": "q-044",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 34525
+  },
+  {
+   "id": "q-045",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 30302
+  },
+  {
+   "id": "q-046",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 29970
+  },
+  {
+   "id": "q-047",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 28515
+  },
+  {
+   "id": "q-048",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 36414
+  },
+  {
+   "id": "q-049",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 34624
+  },
+  {
+   "id": "q-050",
+   "lang": "es",
+   "units": 20,
+   "state_chars": 39386
+  }
+ ]
+}

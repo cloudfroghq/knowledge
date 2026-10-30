@@ -1,0 +1,73 @@
+# One process, several vaults. Copy to vaults.yaml and point KNOWLEDGE_VAULTS
+# at it, or place it at ~/.config/knowledge/vaults.yaml.
+#
+# Nothing secret goes in this file: a deploy key or a webhook secret is named
+# by the environment variable that holds it (deploy_key_env, secret_env),
+# never written here. A value that looks like a credential is rejected with
+# E_SECRET_IN_MANIFEST.
+version: 1
+
+# Where each vault keeps its index (<data_dir>/<slug>). Relative paths
+# are anchored at this file. KNOWLEDGE_HOME overrides it.
+data_dir: ~/.local/share/knowledge
+
+vaults:
+  - slug: acme
+    path: ./checkouts/acme-vault
+    default: true
+    repo: git@github.com:example-org/acme-vault.git
+    deploy_key_env: ACME_DEPLOY_KEY_B64
+    git:
+      auto_pull: true
+      branch: main
+    webhook:
+      secret_env: ACME_WEBHOOK_SECRET
+    features: [flows, governance, git-webhook]
+    memory:
+      project: knowledge
+    embeddings:
+      provider: openai
+      model: text-embedding-3-large
+      key_env: OPENAI_API_KEY
+
+  - slug: globex
+    path: ./checkouts/globex-vault
+    repo: git@github.com:example-org/globex-vault.git
+    deploy_key_env: GLOBEX_DEPLOY_KEY_B64
+    git:
+      branch: main
+    webhook:
+      secret_env: GLOBEX_WEBHOOK_SECRET
+    features: [flows, confluence, git-webhook]
+
+  - slug: initech
+    path: ./checkouts/initech-vault
+    repo: git@github.com:example-org/initech-vault.git
+    deploy_key_env: INITECH_DEPLOY_KEY_B64
+    webhook:
+      secret_env: INITECH_WEBHOOK_SECRET
+    features: [git-webhook]
+
+  # A vault that arrives as a mounted volume has no repo: the server never
+  # runs git for it, and a deploy_key_env, git or webhook block would be
+  # rejected because they all require repo.
+  #
+  # - slug: notes-volume
+  #   path: /data/vaults/notes
+  #   features: [flows]
+  #   embeddings:
+  #     provider: none
+
+# HTTP only: who may call the server, and with which scopes. read uses the
+# server; admin also runs reindex, sync_confluence and the manual-bearer
+# POST /webhook/reindex. Each entry names the variable its token lives in.
+# Once bearers is declared, MCP_API_KEY and MCP_ADMIN_KEY are ignored; over
+# stdio the whole block is ignored (W_BEARERS_IGNORED_STDIO).
+#
+# bearers:
+#   - id: ana
+#     token_env: KNOWLEDGE_TOKEN_ANA
+#     scopes: [read]
+#   - id: ops
+#     token_env: KNOWLEDGE_TOKEN_OPS
+#     scopes: [read, admin]

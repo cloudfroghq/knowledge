@@ -1,0 +1,8 @@
+slug: alpha
+knowledge_contract: ">=2.0,<3"
+review:
+  thresholds_days:
+    runbook: 30
+    default: 200
+memory:
+  export_folder: "90 - Memory"

@@ -1,0 +1,1 @@
+{"content":[{"text":"{\"contract\":\"1.2.0\",\"default\":\"cloudfrog\",\"vaults\":[{\"slug\":\"cloudfrog\",\"name\":\"cloudfrog\",\"default\":true,\"features\":[]}]}","type":"text"}],"isError":false,"structuredContent":{"contract":"1.2.0","default":"cloudfrog","vaults":[{"default":true,"features":[],"name":"cloudfrog","slug":"cloudfrog"}]}}

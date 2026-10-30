@@ -1,0 +1,1 @@
+{"content":[{"text":"{\"error\":\"Confluence credentials not configured. Set CONFLUENCE_URL, CONFLUENCE_EMAIL, and CONFLUENCE_TOKEN in your .env file.\"}","type":"text"}],"isError":false,"structuredContent":{"error":"Confluence credentials not configured. Set CONFLUENCE_URL, CONFLUENCE_EMAIL, and CONFLUENCE_TOKEN in your .env file."}}

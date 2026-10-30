@@ -1,0 +1,156 @@
+# Import Linter contracts for src/knowledge/. The modules stay flat (no
+# subpackages: tests and scripts patch them by module path), so the three
+# groups below are enforced by contract instead of by directory.
+#
+#   core  errors ports contract settings config graph usage profiles pointers chunker
+#         principals extensions embeddings stores vault_source indexer vault_lint rerank
+#         registry
+#         Enough to index and query any number of vaults: no HTTP, no MCP,
+#         no git, no Confluence. rerank orders search results with a judge it
+#         receives already built and never speaks to a provider itself.
+#         config is core because it only wraps settings;
+#         principals maps bearer tokens to ids and scopes without any HTTP
+#         type; extensions only describes the optional extensions and names
+#         their modules as strings, so it imports none of them.
+#   ext   repos gitsync memory_http memory_bridge review confluence_sync graph_targets
+#         webhook flows jira_client jira_sync judges contexts
+#         Optional integrations: git sync, reads of the memory server and the
+#         writes of the memory-bridge, review policy, Confluence, graphify
+#         onboarding targets, the reindex webhook, the auth-flow documents,
+#         the Jira search mirrored into memory tasks, the System One
+#         judge (jev, kev) that reranks search and the client-side install
+#         of a vault's context packages into the checkouts (init).
+#   http  auth server cli
+#         Transport, composition and entry points. server is the only module
+#         that imports an extension by name (importlib), on demand;
+#         tests/test_dynamic_imports.py keeps every other module from doing so.
+#
+# Four contracts hold that shape:
+#
+#   layers             the full order below; "|" marks independent siblings,
+#                      which may not import one another either. A name in
+#                      parentheses is a module the order reserves before it
+#                      exists; the parentheses go away with its first
+#                      commit, which also adds it to its group below.
+#   core-isolated      no core module imports an ext or http module.
+#   ext-below-http     no ext module imports an http module.
+#   core-no-transport  no core module imports mcp, starlette or uvicorn.
+#
+# repos sits at the bottom of the order although it is ext: it imports
+# nothing internal, which lets shell tooling run `python3 -m knowledge.repos`
+# without the project virtualenv. Its group is enforced by core-isolated,
+# since no core module may import it.
+#
+# Run: uv run lint-imports
+
+[importlinter]
+root_package = knowledge
+include_external_packages = True
+
+[importlinter:contract:layers]
+name = Layered order of src/knowledge (no upward or sibling imports)
+type = layers
+containers =
+    knowledge
+layers =
+    cli
+    server
+    auth | webhook | graph_targets | jira_sync
+    confluence_sync | review | gitsync | memory_http | memory_bridge | jira_client | flows | judges | contexts
+    registry
+    indexer | vault_lint | rerank
+    embeddings | stores | vault_source | usage | graph | profiles | pointers | chunker | principals | extensions
+    config
+    settings
+    ports | errors | repos | contract
+
+[importlinter:contract:core-isolated]
+name = Core imports neither ext nor http
+type = forbidden
+source_modules =
+    knowledge.errors
+    knowledge.ports
+    knowledge.contract
+    knowledge.settings
+    knowledge.config
+    knowledge.graph
+    knowledge.usage
+    knowledge.profiles
+    knowledge.pointers
+    knowledge.chunker
+    knowledge.principals
+    knowledge.extensions
+    knowledge.embeddings
+    knowledge.stores
+    knowledge.vault_source
+    knowledge.indexer
+    knowledge.vault_lint
+    knowledge.rerank
+    knowledge.registry
+forbidden_modules =
+    knowledge.repos
+    knowledge.gitsync
+    knowledge.memory_http
+    knowledge.memory_bridge
+    knowledge.review
+    knowledge.confluence_sync
+    knowledge.graph_targets
+    knowledge.webhook
+    knowledge.flows
+    knowledge.jira_client
+    knowledge.jira_sync
+    knowledge.judges
+    knowledge.contexts
+    knowledge.auth
+    knowledge.server
+    knowledge.cli
+
+[importlinter:contract:ext-below-http]
+name = Extensions do not import the http layer
+type = forbidden
+source_modules =
+    knowledge.repos
+    knowledge.gitsync
+    knowledge.memory_http
+    knowledge.memory_bridge
+    knowledge.review
+    knowledge.confluence_sync
+    knowledge.graph_targets
+    knowledge.webhook
+    knowledge.flows
+    knowledge.jira_client
+    knowledge.jira_sync
+    knowledge.judges
+    knowledge.contexts
+forbidden_modules =
+    knowledge.auth
+    knowledge.server
+    knowledge.cli
+
+[importlinter:contract:core-no-transport]
+name = Core never imports an HTTP or MCP library
+type = forbidden
+source_modules =
+    knowledge.errors
+    knowledge.ports
+    knowledge.contract
+    knowledge.settings
+    knowledge.config
+    knowledge.graph
+    knowledge.usage
+    knowledge.profiles
+    knowledge.pointers
+    knowledge.chunker
+    knowledge.principals
+    knowledge.extensions
+    knowledge.embeddings
+    knowledge.stores
+    knowledge.vault_source
+    knowledge.indexer
+    knowledge.vault_lint
+    knowledge.rerank
+    knowledge.registry
+forbidden_modules =
+    mcp
+    starlette
+    uvicorn

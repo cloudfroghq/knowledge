@@ -1,0 +1,62 @@
+{
+  "repos": {
+    "roots": [
+      {
+        "id": "work",
+        "description": "Directory holding the ledger checkouts."
+      },
+      {
+        "id": "side",
+        "description": "Directory holding the side projects; the vault suggests where, and the suggestion counts only where that directory exists.",
+        "default": "~/side-projects"
+      }
+    ],
+    "groups": {
+      "standalone": "An independent clone. Nothing else brings it down."
+    },
+    "entries": [
+      {
+        "id": "ledger-api",
+        "context": "ledger-api",
+        "install_mode": "link",
+        "remote": "ledger-api",
+        "group": "standalone",
+        "root": "work",
+        "path": "ledger/api",
+        "description": "Ledger API."
+      },
+      {
+        "id": "ledger-web",
+        "context": "ledger-web",
+        "install_mode": "copy",
+        "remote": "ledger-web",
+        "group": "standalone",
+        "root": "work",
+        "path": "ledger/web",
+        "description": "Ledger frontend. It holds git worktrees, so its context is copied rather than linked."
+      },
+      {
+        "id": "notes-cli",
+        "context": "notes-cli",
+        "install_mode": "link",
+        "remote": "notes-cli",
+        "group": "standalone",
+        "root": "side",
+        "path": "notes-cli",
+        "description": "Command line for notes."
+      }
+    ]
+  },
+  "graph": {
+    "targets": [
+      {
+        "repo": "ledger-api",
+        "path": "."
+      },
+      {
+        "repo": "ledger-web",
+        "path": "."
+      }
+    ]
+  }
+}

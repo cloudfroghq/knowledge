@@ -1,0 +1,1 @@
+{"content":[{"text":"Error executing tool get_document: E_ARGUMENT_RETIRED: include_metadata was retired in contract 2.0.0; metadata carries type, status, service, owner, tags, last_updated: pass full_metadata=true for every frontmatter key, or fields without metadata to leave it out","type":"text"}],"isError":true}

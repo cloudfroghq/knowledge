@@ -1,0 +1,49 @@
+{
+  "model": "jev-1.13.0",
+  "state": {
+    "query": "¿Cómo creo un tenant de prueba desde la CLI?",
+    "candidates": [
+      {
+        "document": "Crear tenant de prueba",
+        "section": "Pasos",
+        "text": "Ejecuta `docker compose exec api ./cli tenant create <sub>` para crear el tenant de prueba."
+      },
+      {
+        "document": "Crear tenant de prueba",
+        "section": "Contexto",
+        "text": "El tenant de prueba vive en el stack local."
+      },
+      {
+        "document": "Rotar certificados",
+        "section": "",
+        "text": "Los certificados se rotan cada noventa días con certbot."
+      }
+    ]
+  },
+  "questions": {
+    "c0": {
+      "type": "noul",
+      "instructions": "Does `candidates[0]` contain the information that answers `query`?",
+      "criteria": {
+        "true": "The passage states the specific fact, cause, command or procedure the query asks for.",
+        "false": "The passage is only on a related topic, mentions the terms in passing, or does not answer the query."
+      }
+    },
+    "c1": {
+      "type": "noul",
+      "instructions": "Does `candidates[1]` contain the information that answers `query`?",
+      "criteria": {
+        "true": "The passage states the specific fact, cause, command or procedure the query asks for.",
+        "false": "The passage is only on a related topic, mentions the terms in passing, or does not answer the query."
+      }
+    },
+    "c2": {
+      "type": "noul",
+      "instructions": "Does `candidates[2]` contain the information that answers `query`?",
+      "criteria": {
+        "true": "The passage states the specific fact, cause, command or procedure the query asks for.",
+        "false": "The passage is only on a related topic, mentions the terms in passing, or does not answer the query."
+      }
+    }
+  }
+}

@@ -1,0 +1,89 @@
+# Two instances of the generic knowledge server, each with its own vaults.
+#
+# Both services extend `knowledge-mcp` of infra/compose.yml: the service
+# definition is written once, there. What differs per instance is only what
+# makes it a tenant: the vaults it is given, its bearers, its port, its own
+# index, clones and network.
+#
+#   acme    acme-handbook (git, over file://) and acme-ops (a plain folder)
+#   globex  globex-docs (git, over file://) and globex-notes (a plain folder, no apps)
+#
+# lab/seed.sh builds the fixtures under lab/.work and lab/run.sh writes the
+# bearers and ports into lab/.work/lab.env; run both through lab/run.sh.
+# Embeddings use the deterministic bag-of-words provider: no OpenAI key, no
+# network. OPENAI_API_KEY is cleared on purpose so a key exported in the
+# host shell never reaches the containers.
+name: knowledge-lab
+
+services:
+  knowledge-acme:
+    extends:
+      file: ../infra/compose.yml
+      service: knowledge-mcp
+    ports:
+      - "127.0.0.1:${LAB_ACME_PORT:-18101}:8000"
+    environment:
+      KNOWLEDGE_VAULTS_YAML: |
+        version: 1
+        vaults:
+          - slug: acme-handbook
+            default: true
+            repo: file:///repos/acme-handbook.git
+            git:
+              branch: main
+          - slug: acme-ops
+            path: /vaults/acme-ops
+      MCP_API_KEY: ${LAB_ACME_READ_KEY:?run lab/run.sh, it writes lab/.work/lab.env}
+      MCP_ADMIN_KEY: ${LAB_ACME_ADMIN_KEY:?run lab/run.sh, it writes lab/.work/lab.env}
+      MCP_WEBHOOK_SECRET: ${LAB_ACME_WEBHOOK_SECRET:?run lab/run.sh, it writes lab/.work/lab.env}
+      KNOWLEDGE_EMBEDDINGS_PROVIDER: bag-of-words
+      OPENAI_API_KEY: ""
+    volumes:
+      - acme-index:/data/index
+      - acme-vaults:/data/vaults
+      - acme-local:/data/local
+      - ./.work/repos/acme-handbook.git:/repos/acme-handbook.git:ro
+      - ./.work/vaults/acme-ops:/vaults/acme-ops
+    networks: !override
+      - acme-net
+
+  knowledge-globex:
+    extends:
+      file: ../infra/compose.yml
+      service: knowledge-mcp
+    ports:
+      - "127.0.0.1:${LAB_GLOBEX_PORT:-18102}:8000"
+    environment:
+      KNOWLEDGE_VAULTS_YAML: |
+        version: 1
+        vaults:
+          - slug: globex-docs
+            default: true
+            repo: file:///repos/globex-docs.git
+          - slug: globex-notes
+            path: /vaults/globex-notes
+      MCP_API_KEY: ${LAB_GLOBEX_READ_KEY:?run lab/run.sh, it writes lab/.work/lab.env}
+      MCP_ADMIN_KEY: ${LAB_GLOBEX_ADMIN_KEY:?run lab/run.sh, it writes lab/.work/lab.env}
+      MCP_WEBHOOK_SECRET: ${LAB_GLOBEX_WEBHOOK_SECRET:?run lab/run.sh, it writes lab/.work/lab.env}
+      KNOWLEDGE_EMBEDDINGS_PROVIDER: bag-of-words
+      OPENAI_API_KEY: ""
+    volumes:
+      - globex-index:/data/index
+      - globex-vaults:/data/vaults
+      - globex-local:/data/local
+      - ./.work/repos/globex-docs.git:/repos/globex-docs.git:ro
+      - ./.work/vaults/globex-notes:/vaults/globex-notes
+    networks: !override
+      - globex-net
+
+networks:
+  acme-net:
+  globex-net:
+
+volumes:
+  acme-index:
+  acme-vaults:
+  acme-local:
+  globex-index:
+  globex-vaults:
+  globex-local:

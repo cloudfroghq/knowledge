@@ -1,0 +1,34 @@
+{
+  "embedding_model": "text-embedding-3-large",
+  "memory": {
+    "vault_folder": "90 - Memory",
+    "export_types": [
+      "decision",
+      "discovery"
+    ],
+    "promotion": {
+      "output_dir": "build/promotions",
+      "target_folders": {
+        "decision": "Architecture/Decisions",
+        "discovery": "Architecture/Discoveries"
+      },
+      "doc_status": "draft",
+      "default_owner": "plat",
+      "branch_prefix": "feature/memory-promotion"
+    }
+  },
+  "review": {
+    "thresholds_days": {
+      "auth-flow": 180,
+      "business-flow": 180,
+      "registration-flow": 180,
+      "runbook": 90,
+      "playbook": 90,
+      "architecture": 365,
+      "default": 270
+    }
+  },
+  "confluence": {
+    "url": "https://example.atlassian.net"
+  }
+}

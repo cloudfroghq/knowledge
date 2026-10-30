@@ -1,0 +1,158 @@
+# The one knowledge-server compose. It carries no tenant: which vaults a
+# server instance serves is decided by its environment, so N instances are N
+# deployments of this same file with N different environments.
+#
+# Vaults are injected, never baked in. Put the content of a vaults.yaml in
+# KNOWLEDGE_VAULTS_YAML (a multi-line value; with `docker compose` a `|` block
+# in an override, in Dokploy the environment panel):
+#
+#   version: 1
+#   vaults:
+#     - slug: team-docs              # git vault: `repo` (+ optional git.branch)
+#       default: true                #   cloned into /data/vaults/<slug>, pulled
+#       repo: git@host:org/docs.git  #   on every start and by reindex(pull=true)
+#       git: {branch: main}
+#     - slug: team-notes             # folder vault: `path` only; the folder is
+#       path: /data/local/notes      #   mounted by the operator, git never runs
+#
+# A git vault read over ssh needs a deploy key (base64 of the private key):
+# <SLUG_UPPER>_GIT_DEPLOY_KEY_B64 for that vault (team-docs -> TEAM_DOCS_...),
+# else the shared GIT_DEPLOY_KEY_B64. A file://, http(s):// or local-path
+# remote needs none. Per-vault keys are not listed below because the slugs are
+# not known here: put them in the optional env file named by KNOWLEDGE_ENV_FILE
+# (default infra/.env.vault-keys, gitignored) or in an override's environment.
+#
+# Without KNOWLEDGE_VAULTS_YAML the server serves one vault the way the single
+# vault composes always did: VAULT_PATH, VAULT_REMOTE (git on when set),
+# VAULT_BRANCH and GIT_DEPLOY_KEY_B64.
+#
+# Secrets come from the compose environment and are never committed:
+# MCP_API_KEY (read bearer), MCP_ADMIN_KEY (admin bearer, distinct from it),
+# MCP_WEBHOOK_SECRET, OPENAI_API_KEY and the deploy keys.
+#
+# No host port is published and no router label is set: a deployment platform
+# routes to the container port 8000, and a plain `docker compose` user adds
+# `ports:` in an override (several instances on one host cannot share one).
+#
+# The memory replica (memory-cloud and its postgres) is a compose profile:
+# `docker compose --profile memory up` (or COMPOSE_PROFILES=memory) starts it,
+# and without the profile only the knowledge server runs. The profile needs
+# POSTGRES_PASSWORD, MEMORY_JWT_SECRET, MEMORY_CLOUD_TOKEN, MEMORY_CLOUD_ADMIN
+# and MEMORY_CLOUD_TOKEN_PEPPER. MEMORY_CLOUD_IDENTITY_MODE is optional and
+# defaults to `grace`.
+#
+# Index of each vault: /data/index/<slug> (the knowledge-index volume).
+# Clones of git vaults: /data/vaults/<slug> (the knowledge-vaults volume).
+# /data/local is an empty volume to mount folder vaults on; KNOWLEDGE_LOCAL_DIR
+# may name a host directory instead.
+name: knowledge
+
+services:
+  knowledge-mcp:
+    build:
+      context: ..
+    restart: unless-stopped
+    env_file:
+      - path: ${KNOWLEDGE_ENV_FILE:-.env.vault-keys}
+        required: false
+    environment:
+      MCP_TRANSPORT: http
+      MCP_HTTP_HOST: 0.0.0.0
+      MCP_HTTP_PORT: "8000"
+      # Vault injection.
+      KNOWLEDGE_VAULTS_YAML: ${KNOWLEDGE_VAULTS_YAML:-}
+      GIT_DEPLOY_KEY_B64: ${GIT_DEPLOY_KEY_B64:-}
+      # Single-vault mode, used only while KNOWLEDGE_VAULTS_YAML is empty.
+      VAULT_PATH: ${VAULT_PATH:-/data/vaults/default}
+      VAULT_CLONE_DIR: ${VAULT_CLONE_DIR:-/data/vaults/default}
+      VAULT_REMOTE: ${VAULT_REMOTE:-}
+      VAULT_BRANCH: ${VAULT_BRANCH:-main}
+      # The served slug. Empty reads as unset: the slug is then the one the vault's own
+      # vault.yaml declares, or `vault`. Naming it here is the only way to override both.
+      CHROMA_COLLECTION: ${CHROMA_COLLECTION:-}
+      KNOWLEDGE_INDEX_DIR: ${KNOWLEDGE_INDEX_DIR:-/data/index/${CHROMA_COLLECTION:-vault}}
+      # MCP_API_KEY is the read bearer of the clients; MCP_ADMIN_KEY, distinct
+      # from it, is the only one that can call reindex, sync_confluence or a
+      # manual POST /webhook/reindex. Empty values are read as unset.
+      MCP_API_KEY: ${MCP_API_KEY:-}
+      MCP_ADMIN_KEY: ${MCP_ADMIN_KEY:-}
+      MCP_WEBHOOK_SECRET: ${MCP_WEBHOOK_SECRET:-}
+      # Embeddings: `openai` by default (needs OPENAI_API_KEY); a vault's own
+      # vault.yaml or KNOWLEDGE_EMBEDDINGS_PROVIDER picks another provider.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      KNOWLEDGE_EMBEDDINGS_PROVIDER: ${KNOWLEDGE_EMBEDDINGS_PROVIDER:-}
+    command: ["knowledge-bootstrap"]
+    volumes:
+      - knowledge-index:/data/index
+      - knowledge-vaults:/data/vaults
+      - ${KNOWLEDGE_LOCAL_DIR:-knowledge-local}:/data/local
+    networks:
+      - memory-net
+
+  memory-cloud:
+    profiles: [memory]
+    # `latest` is a moving tag, so the forced pull is what makes it mean the
+    # newest release. Set MEMORY_IMAGE_TAG to an exact version to roll back.
+    # The GHCR package is private: the pull needs a registry credential on the
+    # host. No token belongs in this file.
+    image: ghcr.io/horacioespinosa/memory:${MEMORY_IMAGE_TAG:-latest}
+    pull_policy: always
+    # `cloud serve` pings postgres once with a 5s deadline and exits when it is
+    # not accepting connections, so the health condition keeps that from
+    # happening at start and the restart policy recovers a later loss.
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MEMORY_DATABASE_URL: postgres://memory:${POSTGRES_PASSWORD:-}@postgres:5432/memory_cloud?sslmode=disable
+      MEMORY_JWT_SECRET: ${MEMORY_JWT_SECRET:-}
+      MEMORY_CLOUD_TOKEN: ${MEMORY_CLOUD_TOKEN:-}
+      MEMORY_CLOUD_ADMIN: ${MEMORY_CLOUD_ADMIN:-}
+      MEMORY_CLOUD_TOKEN_PEPPER: ${MEMORY_CLOUD_TOKEN_PEPPER:-}
+      # `grace` accepts the shared MEMORY_CLOUD_TOKEN beside personal tokens;
+      # `required` answers it on /sync/* with 401 identity_required and limits
+      # the dashboard to admins. A memory image that predates it ignores it.
+      MEMORY_CLOUD_IDENTITY_MODE: ${MEMORY_CLOUD_IDENTITY_MODE:-grace}
+      # Single-user server behind a bearer token: the wildcard replicates every
+      # project enrolled locally instead of gatekeeping by name.
+      MEMORY_CLOUD_ALLOWED_PROJECTS: "*"
+      MEMORY_CLOUD_HOST: 0.0.0.0
+      MEMORY_PORT: "18080"
+      # Replicates project-profile entities (project cards, tasks, evidence).
+      MEMORY_PROJECTS_SYNC: "1"
+    command: ["cloud", "serve"]
+    networks:
+      - memory-net
+
+  postgres:
+    profiles: [memory]
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: memory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DB: memory_cloud
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memory -d memory_cloud"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - memory-pg:/var/lib/postgresql/data
+    # No host port: only reachable from the compose network.
+    networks:
+      - memory-net
+
+# One named network instead of the implicit default: a service attached
+# elsewhere would otherwise fall back to Docker's default bridge, which has no
+# service discovery, and the name `postgres` would stop resolving. The driver
+# stays unset so the file is not tied to one orchestration mode.
+networks:
+  memory-net:
+
+volumes:
+  knowledge-index:
+  knowledge-vaults:
+  knowledge-local:
+  memory-pg:

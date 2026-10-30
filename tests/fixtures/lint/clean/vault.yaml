@@ -1,0 +1,5 @@
+slug: clean
+name: "Clean"
+scopes: [partner]
+index:
+  exclude: ["_templates/**", "**/Pendientes.md"]
