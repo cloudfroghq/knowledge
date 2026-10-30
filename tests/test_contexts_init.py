@@ -41,6 +41,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -1216,6 +1217,42 @@ def test_a_label_without_a_placeholder_is_followed_by_the_subcommand(
     assert capsys.readouterr().out == "knowledge doctor: init pending for vault(s) contexts; run: acme-knowledge init\n"
     assert contexts.command_label({}, "doctor") == "cloudfrog-knowledge doctor"
     assert contexts.command_label({"KNOWLEDGE_COMMAND_LABEL": "  "}, "init") == "cloudfrog-knowledge init"
+
+
+@pytest.mark.parametrize(
+    ("argv0", "named"),
+    [
+        ("/usr/local/bin/knowledge", "knowledge"),
+        (r"C:\Users\me\.local\bin\knowledge.exe", "knowledge"),
+        ("/usr/local/bin/cloudfrog-knowledge", "cloudfrog-knowledge"),
+        ("/opt/venv/lib/python3.12/site-packages/knowledge/__main__.py", "cloudfrog-knowledge"),
+    ],
+)
+def test_without_a_label_the_hints_name_the_console_script_that_ran(
+    lab: Lab, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, argv0: str, named: str
+) -> None:
+    monkeypatch.delenv("KNOWLEDGE_COMMAND_LABEL", raising=False)
+    monkeypatch.setattr(sys, "argv", [argv0])
+
+    assert cli.main(["doctor", "--brief"]) == 0
+    assert capsys.readouterr().out == f"knowledge doctor: init pending for vault(s) contexts; run: {named} init\n"
+    assert cli.main(["doctor", "--client"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["init"]["command"] == f"{named} init"
+    # The client check keeps its flag: without a label the hint names this CLI.
+    assert report["doctor_command"] == f"{named} doctor --client"
+
+
+def test_a_label_wins_over_the_console_script_name(
+    lab: Lab, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["/usr/local/bin/knowledge"])
+    monkeypatch.setenv("KNOWLEDGE_COMMAND_LABEL", "Contexts/scripts/{command}.sh")
+
+    assert cli.main(["doctor", "--brief"]) == 0
+    assert capsys.readouterr().out == "knowledge doctor: init pending for vault(s) contexts; run: Contexts/scripts/init.sh\n"
+    assert contexts.command_label({"KNOWLEDGE_COMMAND_LABEL": "acme-knowledge"}, "init") == "acme-knowledge init"
+    assert contexts.command_label({}, "init") == "knowledge init"
 
 
 # --- which checkouts this machine selects: the apply list ------------------------------------

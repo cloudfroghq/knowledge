@@ -83,3 +83,13 @@ def test_wheel_only_carries_package_and_dist_info(built: tuple[Path, Path]) -> N
     ]
     assert unexpected == []
     assert any(name.startswith("knowledge/") for name in names)
+
+
+def test_wheel_installs_both_console_scripts(built: tuple[Path, Path]) -> None:
+    _, wheel = built
+    with zipfile.ZipFile(wheel) as archive:
+        [entry_points] = [name for name in archive.namelist() if name.endswith(".dist-info/entry_points.txt")]
+        text = archive.read(entry_points).decode("utf-8")
+    scripts = text.split("[console_scripts]", 1)[1].split("\n[", 1)[0]
+    declared = {line.split("=", 1)[0].strip(): line.split("=", 1)[1].strip() for line in scripts.splitlines() if "=" in line}
+    assert declared == {"cloudfrog-knowledge": "knowledge.cli:main", "knowledge": "knowledge.cli:main"}

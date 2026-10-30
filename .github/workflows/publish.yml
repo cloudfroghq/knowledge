@@ -1,0 +1,176 @@
+# Publish: a pushed `v*` tag becomes the PyPI release `cloudfrog-knowledge` and
+# the npm package `@cloudfrog/knowledge` of the same version. The git tag is
+# the third channel and needs no job.
+#
+# Two jobs, so that nothing that builds or tests can mint a publishing token:
+#
+#   build    Holds only `contents: read`. Checks that the tag, pyproject.toml,
+#            the plugin and npm/package.json name one version
+#            (scripts/check-version.sh), that the uv checksums the npm wrapper
+#            embeds are the release's and that the wrapper installs that uv
+#            (npm/scripts/uv-release.js), runs the wrapper's tests and its
+#            `npm pack --dry-run`, builds the sdist and the wheel, installs the
+#            wheel in a fresh Python 3.12 environment and runs
+#            `cloudfrog-knowledge --version` and `knowledge --version`.
+#            Uploads dist/ for the next job.
+#   publish  Runs only for a tag ref: on the tag push, or on a manual run from a
+#            tag with `dry_run` unchecked. Uses the `release` environment (its
+#            deployment policy admits `v*` tags only) and `id-token: write`, the
+#            OIDC token PyPI and npm trusted publishing exchange; no secret and
+#            no long-lived token exist. PyPI first (`uv publish
+#            --trusted-publishing always` with the wheel and sdist the build job
+#            verified), then npm (`npm publish --provenance --access public`
+#            from npm/, npm 11.5.1 or later). Each channel skips, with a notice,
+#            only when that exact version is already published (the first npm
+#            release is published by hand, see docs/runbooks/ci-ring1.md); any
+#            other answer from the registry fails the job.
+#
+# Manual runs: `gh workflow run publish.yml --ref main` builds and verifies
+# without publishing (`dry_run` defaults to true and the publish job needs a
+# tag ref anyway).
+#
+# uv comes from scripts/ci-install-uv.sh: the pinned release archive, checked
+# against the SHA-256 recorded in npm/lib/uv-release.json. Every action is a
+# GitHub-owned one pinned to a full commit SHA with its tag in a comment.
+# tests/test_pipeline_contract.py fails the suite if a trigger, the job split,
+# the permissions or a verification step changes.
+
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify only, never publish"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: "Build and verify the release"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+      - name: Install uv (pinned archive, SHA-256 verified)
+        run: scripts/ci-install-uv.sh "$RUNNER_TEMP/uv"
+      # On a tag the tag is compared with every file; on a branch there is no
+      # tag and only the files are.
+      - name: Check that the tag and every version agree
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            scripts/check-version.sh "$REF_NAME"
+          else
+            scripts/check-version.sh
+          fi
+      - name: Check the uv checksums the npm wrapper embeds and install through it
+        run: |
+          node npm/scripts/uv-release.js --check
+          node npm/scripts/uv-release.js --smoke
+      - name: Test the npm wrapper
+        working-directory: npm
+        run: npm test
+      - name: List what the npm package ships
+        working-directory: npm
+        run: npm pack --dry-run --ignore-scripts
+      - name: Build the sdist and the wheel
+        run: uv build --out-dir dist
+      - name: Install the wheel and run both console scripts
+        run: |
+          set -eu
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          uv venv --python 3.12 "$RUNNER_TEMP/venv"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" "dist/cloudfrog_knowledge-$version-py3-none-any.whl"
+          for command in cloudfrog-knowledge knowledge; do
+            printed=$("$RUNNER_TEMP/venv/bin/$command" --version)
+            echo "$printed"
+            if [ "$printed" != "$command $version" ]; then
+              echo "::error::$command --version printed '$printed', expected '$command $version'"
+              exit 1
+            fi
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: "Publish to PyPI and npm"
+    needs: build
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist
+      - name: Install uv (pinned archive, SHA-256 verified)
+        run: scripts/ci-install-uv.sh "$RUNNER_TEMP/uv"
+      - name: Publish to PyPI, unless this version is already there
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -eu
+          version=${REF_NAME#v}
+          wheel="dist/cloudfrog_knowledge-$version-py3-none-any.whl"
+          sdist="dist/cloudfrog_knowledge-$version.tar.gz"
+          for file in "$wheel" "$sdist"; do
+            [ -f "$file" ] || { echo "::error::$file was not built"; exit 1; }
+          done
+          status=$(curl -sS -o /dev/null -w '%{http_code}' --retry 3 "https://pypi.org/pypi/cloudfrog-knowledge/$version/json")
+          case "$status" in
+            200) echo "::notice::cloudfrog-knowledge $version is already on PyPI; nothing to publish"; exit 0 ;;
+            404) ;;
+            *) echo "::error::PyPI answered HTTP $status for cloudfrog-knowledge $version"; exit 1 ;;
+          esac
+          uv publish --trusted-publishing always "$wheel" "$sdist"
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      # Trusted publishing (OIDC) needs npm 11.5.1 or later; Node 22 ships npm 10.
+      - name: Install npm 11.20.0
+        run: npm install -g npm@11.20.0 && npm --version
+      - name: Publish to npm, unless this version is already there
+        working-directory: npm
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -eu
+          version=${REF_NAME#v}
+          status=$(curl -sS -o /dev/null -w '%{http_code}' --retry 3 "https://registry.npmjs.org/@cloudfrog%2Fknowledge/$version")
+          case "$status" in
+            200) echo "::notice::@cloudfrog/knowledge $version is already on npm; nothing to publish"; exit 0 ;;
+            404) ;;
+            *) echo "::error::the npm registry answered HTTP $status for @cloudfrog/knowledge $version"; exit 1 ;;
+          esac
+          npm publish --provenance --access public

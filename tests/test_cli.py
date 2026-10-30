@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from importlib import metadata
 from pathlib import Path
 
 import pytest
@@ -218,8 +219,52 @@ def test_eval_help_runs_the_script_parser() -> None:
 
 def test_the_entry_point_targets_the_cli_and_the_server_alias_survives() -> None:
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert data["project"]["scripts"]["cloudfrog-knowledge"] == "knowledge.cli:main"
+    # `knowledge` is a second name for the same entry point, nothing else.
+    assert data["project"]["scripts"] == {
+        "cloudfrog-knowledge": "knowledge.cli:main",
+        "knowledge": "knowledge.cli:main",
+    }
     assert callable(server.main)
+
+
+@pytest.mark.parametrize(
+    ("argv0", "prog"),
+    [
+        ("/home/me/.local/bin/cloudfrog-knowledge", "cloudfrog-knowledge"),
+        ("/home/me/.local/bin/knowledge", "knowledge"),
+        (r"C:\Users\me\.local\bin\knowledge.exe", "knowledge"),
+        (r"C:\Users\me\.local\bin\cloudfrog-knowledge.EXE", "cloudfrog-knowledge"),
+        ("/opt/venv/lib/python3.12/site-packages/knowledge/__main__.py", "cloudfrog-knowledge"),
+    ],
+)
+def test_version_and_usage_name_the_console_script_that_ran(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], argv0: str, prog: str
+) -> None:
+    monkeypatch.setattr(sys, "argv", [argv0])
+
+    with pytest.raises(SystemExit) as info:
+        cli.main(["--version"])
+    assert info.value.code == 0
+    assert capsys.readouterr().out == f"{prog} {cli._package_version()}\n"
+
+    with pytest.raises(SystemExit) as info:
+        cli.main(["--help"])
+    assert info.value.code == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f"usage: {prog} [-h] [--version]")
+    assert "--version" in out
+
+    with pytest.raises(SystemExit) as info:
+        cli.main(["vault-lint", "--out", "x"])
+    assert info.value.code == 2
+    assert capsys.readouterr().err.startswith(f"usage: {prog} vault-lint ")
+
+
+def test_the_version_is_the_installed_distribution() -> None:
+    assert cli._package_version() == metadata.version("cloudfrog-knowledge")
+    assert cli._package_version() == tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]["version"]
 
 
 def test_python_dash_m_knowledge_reports_a_bad_path_without_a_traceback() -> None:

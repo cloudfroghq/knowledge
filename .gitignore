@@ -4,6 +4,10 @@ __pycache__/
 .venv/
 dist/
 *.egg-info/
+# npm wrapper: `npm pack` output; it has no dependencies, so node_modules only
+# appears by accident.
+npm/node_modules/
+npm/*.tgz
 
 # Data (managed via GitHub Releases, not committed)
 .data/

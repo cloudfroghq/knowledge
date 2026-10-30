@@ -5,8 +5,9 @@
 #
 # Compared: `version` in pyproject.toml, `version` in
 # plugin/claude-code/.claude-plugin/plugin.json, the `@v<version>` ref of the
-# package source in plugin/claude-code/.mcp.json and, when uv.lock exists, the
-# locked version of the project itself. The tag is compared too when it is
+# package source in plugin/claude-code/.mcp.json, `version` in npm/package.json
+# (the npm wrapper runs the PyPI release of its own version) and, when uv.lock
+# exists, the locked version of the project itself. The tag is compared too when it is
 # given as the argument or, without an argument, when HEAD carries a `v*` tag;
 # with neither, the tag check is skipped, so a release branch passes before its
 # tag exists. Read-only. Exit status: 0 when everything agrees, 1 otherwise,
@@ -78,6 +79,14 @@ def mcp_ref() -> str:
     return found[0]
 
 
+def npm_version() -> str:
+    try:
+        version = json.loads(read("npm/package.json"))["version"]
+    except (ValueError, KeyError):
+        fail("npm/package.json has no version")
+    return str(version)
+
+
 def lock_version() -> str | None:
     if not (root / "uv.lock").is_file():
         return None
@@ -93,6 +102,7 @@ seen = {
     "pyproject.toml": pyproject_version(),
     "plugin.json": plugin_version(),
     ".mcp.json": mcp_ref(),
+    "npm/package.json": npm_version(),
 }
 locked = lock_version()
 if locked is not None:

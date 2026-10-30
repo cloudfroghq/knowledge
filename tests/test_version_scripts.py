@@ -1,7 +1,7 @@
 """``scripts/bump-version.sh`` and ``scripts/check-version.sh`` on a throwaway checkout.
 
-Each case builds a minimal tree (``pyproject.toml``, ``uv.lock`` and a copy of
-the plugin) under ``tmp_path`` and points the scripts at it through
+Each case builds a minimal tree (``pyproject.toml``, ``uv.lock``, a copy of
+the plugin and the npm wrapper's ``package.json``) under ``tmp_path`` and points the scripts at it through
 ``KNOWLEDGE_ROOT``. ``bump-version.sh`` runs with ``--no-lock``: refreshing the
 lock is ``uv lock``'s job and needs the package index.
 
@@ -24,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BUMP = REPO_ROOT / "scripts" / "bump-version.sh"
 CHECK = REPO_ROOT / "scripts" / "check-version.sh"
 PLUGIN = REPO_ROOT / "plugin" / "claude-code"
+NPM_MANIFEST = REPO_ROOT / "npm" / "package.json"
 
 _PYPROJECT = """[project]
 name = "cloudfrog-knowledge"
@@ -46,9 +47,15 @@ source = {{ editable = "." }}
 """
 
 
-def _tree(tmp_path: Path, *, version: str = "0.2.0", plugin: str = "0.2.0", lock: bool = True) -> Path:
+def _tree(
+    tmp_path: Path, *, version: str = "0.2.0", plugin: str = "0.2.0", npm: str | None = None, lock: bool = True
+) -> Path:
     root = tmp_path / "checkout"
     shutil.copytree(PLUGIN, root / "plugin" / "claude-code")
+    (root / "npm").mkdir()
+    package = json.loads(NPM_MANIFEST.read_text(encoding="utf-8"))
+    package["version"] = plugin if npm is None else npm
+    (root / "npm" / "package.json").write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
     (root / "pyproject.toml").write_text(_PYPROJECT.format(version=version), encoding="utf-8")
     if lock:
         (root / "uv.lock").write_text(_LOCK.format(version=version), encoding="utf-8")
@@ -88,6 +95,7 @@ def test_check_passes_when_every_place_agrees(tmp_path: Path) -> None:
         "pyproject.toml: 0.2.0",
         "plugin.json: 0.2.0",
         ".mcp.json: 0.2.0",
+        "npm/package.json: 0.2.0",
         "uv.lock: 0.2.0",
         "check-version: ok (0.2.0)",
     ]
@@ -102,7 +110,7 @@ def test_the_real_tree_agrees_on_the_package_version() -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     sources = dict(line.split(": ", 1) for line in result.stdout.splitlines() if ": " in line and "check-version" not in line)
-    assert {"pyproject.toml", "plugin.json", ".mcp.json", "uv.lock"} <= set(sources)
+    assert {"pyproject.toml", "plugin.json", ".mcp.json", "npm/package.json", "uv.lock"} <= set(sources)
     assert len(set(sources.values())) == 1, sources
 
 
@@ -111,6 +119,23 @@ def test_check_fails_when_the_plugin_drifts(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "versions disagree" in result.stderr
+
+
+def test_check_fails_when_the_npm_wrapper_drifts(tmp_path: Path) -> None:
+    result = _run(CHECK, _tree(tmp_path, npm="0.1.0"))
+
+    assert result.returncode == 1
+    assert "npm/package.json: 0.1.0" in result.stdout
+    assert "versions disagree" in result.stderr
+
+
+def test_check_without_the_npm_manifest_is_a_usage_error(tmp_path: Path) -> None:
+    root = _tree(tmp_path)
+    (root / "npm" / "package.json").unlink()
+
+    result = _run(CHECK, root)
+    assert result.returncode == 2
+    assert "cannot read npm/package.json" in result.stderr
 
 
 def test_check_without_a_lock_compares_the_rest(tmp_path: Path) -> None:
@@ -161,6 +186,9 @@ def test_bump_moves_every_place_and_nothing_else(tmp_path: Path) -> None:
     assert manifest["userConfig"]  # the rest of the manifest survives
     mcp = json.loads((root / "plugin" / "claude-code" / ".mcp.json").read_text())
     assert mcp["mcpServers"]["knowledge"]["args"][4].endswith("knowledge.git@v0.3.1")
+    package = json.loads((root / "npm" / "package.json").read_text(encoding="utf-8"))
+    assert package["version"] == "0.3.1"
+    assert package["bin"]  # the rest of the manifest survives
     # --no-lock leaves uv.lock alone, so the closing check reports it.
     assert (root / "uv.lock").read_text(encoding="utf-8") == before_lock
     assert result.returncode == 1
