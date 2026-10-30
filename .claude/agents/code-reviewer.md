@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: Revisa cambios de cd-knowledge-mcp con foco en corrutinas sin esperar, contrato de tools y fronteras de capa antes de aprobar un PR.
+description: Revisa cambios de knowledge con foco en corrutinas sin esperar, contrato de tools y fronteras de capa antes de aprobar un PR.
 model: opus
 effort: high
 tools: Read, Grep, Bash(uv run pytest *), Bash(uv run mypy *), Bash(uv run lint-imports *)

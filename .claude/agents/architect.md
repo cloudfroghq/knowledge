@@ -1,6 +1,6 @@
 ---
 name: architect
-description: Vigila que no se reescriba el servidor de cd-knowledge-mcp, que el contrato de tools no cambie sin versión y que la coherencia con el RFC §9 se mantenga.
+description: Vigila que no se reescriba el servidor de knowledge, que el contrato de tools no cambie sin versión y que la coherencia con el RFC §9 se mantenga.
 model: fable
 effort: max
 permissionMode: plan

@@ -1,6 +1,6 @@
 ---
 name: test-writer
-description: Escribe pytest y pytest-asyncio contra el vault de prueba de cd-knowledge-mcp, nunca contra el vault real.
+description: Escribe pytest y pytest-asyncio contra el vault de prueba de knowledge, nunca contra el vault real.
 model: sonnet
 effort: medium
 tools: Read, Edit, Write, Bash(uv run pytest *)

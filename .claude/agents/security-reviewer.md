@@ -1,6 +1,6 @@
 ---
 name: security-reviewer
-description: Revisión de seguridad de cd-knowledge-mcp — bearer y clave de OpenAI, alcance de tokens, firma del webhook y contenido del vault. Solo lectura.
+description: Revisión de seguridad de knowledge — bearer y clave de OpenAI, alcance de tokens, firma del webhook y contenido del vault. Solo lectura.
 model: opus
 effort: high
 tools: Read, Grep, Bash(gitleaks *)

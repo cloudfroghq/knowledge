@@ -8,11 +8,11 @@
 - [ ] `validate-runbook.sh <archivo-en-staging>` exit 0; los 12 checks pasados.
 - [ ] Índice (`Runbooks.md`) actualizado en staging con la nueva fila si aplica.
 - [ ] `Issue Patterns from Jira.md` actualizado en staging si el `pattern` es nuevo.
-- [ ] Delegación a `open-pr` completada; PR abierto contra `master` de `cd-knowledge-mcp` en rama `docs/rb-nnn-<slug>`, con título `docs(runbooks): add RB-NNN <slug>` y descripción coherente.
+- [ ] Delegación a `open-pr` completada; PR abierto contra `main` de `knowledge` en rama `docs/rb-nnn-<slug>`, con título `docs(runbooks): add RB-NNN <slug>` y descripción coherente.
 - [ ] `mem_save` (`type: architecture`, `topic_key: runbook/RB-NNN`) ejecutado con síntomas, causa raíz, refs de Jira, servicio y owner.
 
 **Paso manual posterior (NO en esta skill):**
 
-- [ ] PR revisado y fusionado contra `master` de `cd-knowledge-mcp` (decisión humana).
+- [ ] PR revisado y fusionado contra `main` de `knowledge` (decisión humana).
 - [ ] Persona ejecuta `bash ai-architecture/ai-platform-plan/05-runbooks/migracion/scripts/aplicar-migracion.sh --apply` para copiar el documento de staging al vault.
 - [ ] Cambios en el vault confirmados y pusheados (sin abrir otro PR desde el agente).
