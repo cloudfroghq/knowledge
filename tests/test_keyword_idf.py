@@ -189,3 +189,43 @@ def test_a_generated_vault(tmp_path: Path) -> None:
         _assert_equal(indexer.keyword_index, reference, terms)
     finally:
         indexer.store.close()  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# How the index is built: a reload source, a repeated path, a later add
+# ---------------------------------------------------------------------------
+
+
+def test_with_a_reload_source_the_bodies_are_read_again_only_when_asked() -> None:
+    reads: list[int] = []
+
+    def reload() -> Iterable[tuple[str, str]]:
+        reads.append(1)
+        return iter(ADVERSARIAL)
+
+    index = KeywordIndex.from_bodies(iter(ADVERSARIAL), reload=reload)
+    reference = ReferenceIdf(ADVERSARIAL)
+    _assert_equal(index, reference, [t for t in _terms(ADVERSARIAL, seed=6, n=1000) if t.split() == [t]])
+    assert reads == [], "terms without whitespace never need the bodies"
+    assert index.docs == reference.docs and reads == [1]
+    _assert_equal(index, reference, _terms(ADVERSARIAL, seed=7, n=1000))
+    assert reads == [1]
+
+
+def test_a_repeated_path_keeps_its_last_body_as_before() -> None:
+    bodies = [*ADVERSARIAL, ("Mixed.md", "only gateway now"), ("Empty.md", "no longer empty")]
+    for reload in (None, lambda: iter(bodies)):
+        index = KeywordIndex.from_bodies(iter(bodies), reload=reload)
+        _assert_equal(index, ReferenceIdf(bodies), _terms(bodies, seed=8, n=1000))
+
+
+def test_add_after_a_build_counts_the_new_document() -> None:
+    index = KeywordIndex.from_bodies(iter(ADVERSARIAL), reload=lambda: iter(ADVERSARIAL))
+    terms = _terms(ADVERSARIAL, seed=9, n=500)
+    assert [index.idf(t) for t in terms] == [ReferenceIdf(ADVERSARIAL).idf(t) for t in terms]
+    index.add("Extra.md", "Gateway STRASSE café extra")
+    reference = ReferenceIdf([*ADVERSARIAL, ("Extra.md", "Gateway STRASSE café extra")])
+    _assert_equal(index, reference, terms + ["gateway", "extra", "strasse"])
+    empty = KeywordIndex()
+    empty.add("a.md", "Alpha beta")
+    _assert_equal(empty, ReferenceIdf([("a.md", "Alpha beta")]), ["alpha", "ALP", "beta gamma", "", "z"])

@@ -9,7 +9,9 @@ import logging
 import math
 import re
 import threading
-from collections.abc import Iterator, Sequence
+from array import array
+from bisect import bisect_right
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -42,6 +44,68 @@ INDEX_LOCK_FILE = ".index.lock"
 # ---------------------------------------------------------------------------
 
 
+class _RunVocabulary:
+    """Which documents hold each maximal run of non-whitespace, in a few flat arrays.
+
+    The runs are the distinct items of ``text.split()`` over every document,
+    sorted and joined with ``"\\n"`` into one string; ``starts`` holds where each
+    run begins in it, and ``offsets``/``postings`` (CSR) list the documents of
+    each run in ascending order. A term without whitespace is a substring of a
+    document exactly when it is a substring of one of that document's runs (an
+    occurrence cannot cross a whitespace character), so ``find`` over the
+    joined runs answers what scanning every body answered, over a much smaller
+    string. The separator is whitespace, so no occurrence spans two runs.
+    """
+
+    __slots__ = ("joined", "starts", "offsets", "postings")
+
+    def __init__(self, texts: Iterable[str]) -> None:
+        # A run seen in one document so far maps to that document's number
+        # (every run of a document shares the int object); a run seen in more
+        # maps to an array of them, in document order. Most runs are seen once.
+        single: dict[str, int] = {}
+        multi: dict[str, array[int]] = {}
+        for doc, text in enumerate(texts):
+            runs = dict.fromkeys(text.split()).keys()
+            known = runs & multi.keys()
+            for held in map(multi.__getitem__, known):
+                held.append(doc)
+            fresh = runs - known
+            second = fresh & single.keys()
+            for run in second:
+                multi[run] = array("I", (single.pop(run), doc))
+            single.update(dict.fromkeys(fresh - second, doc))
+        ordered = sorted([*single, *multi])
+        self.starts: array[int] = array("L")
+        self.offsets: array[int] = array("L", [0])
+        self.postings: array[int] = array("I")
+        position = 0
+        for run in ordered:
+            self.starts.append(position)
+            position += len(run) + 1
+            if run in single:
+                self.postings.append(single[run])
+            else:
+                self.postings.extend(multi.pop(run))
+            self.offsets.append(len(self.postings))
+        del single, multi
+        self.joined = "\n".join(ordered)
+
+    def document_frequency(self, needle: str, doc_count: int) -> int:
+        """How many documents hold ``needle`` (non-empty, no whitespace) inside one of their runs."""
+        joined, starts, offsets, postings = self.joined, self.starts, self.offsets, self.postings
+        seen: set[int] = set()
+        last = len(starts) - 1
+        pos = joined.find(needle)
+        while pos != -1:
+            run = bisect_right(starts, pos) - 1
+            seen.update(postings[offsets[run] : offsets[run + 1]])
+            if run >= last or len(seen) == doc_count:
+                break
+            pos = joined.find(needle, starts[run + 1])
+        return len(seen)
+
+
 class KeywordIndex:
     """TF-IDF over whole document bodies, built in memory from the store.
 
@@ -49,15 +113,44 @@ class KeywordIndex:
     no text, lowercased. Its ``idf`` is what the section selector of the
     pointers weighs query terms with, so it never depends on how bodies were
     chunked.
+
+    ``idf`` of a term without whitespace (every term a query splits into) is
+    answered from a vocabulary of the documents' whitespace runs and memoized,
+    with the value the substring scan over the bodies gives. The bodies
+    themselves (``docs``) are only held when something reads them: built with a
+    ``reload`` source, they are read again from it on first access. An index is
+    replaced after every index run, so neither the memo nor ``docs`` goes stale
+    for the indexer that built it.
     """
 
     def __init__(self) -> None:
-        self.docs: dict[str, str] = {}  # file_path → lowercased text
+        self._docs: dict[str, str] | None = {}  # file_path → lowercased text; None until reloaded
+        self._reload: Callable[[], Iterable[tuple[str, str]]] | None = None
+        self._vocabulary: _RunVocabulary | None = None
+        self._memo: dict[str, float] = {}
+        self._lock = threading.RLock()  # docs may be reloaded while the vocabulary is built
         self.doc_count: int = 0
 
+    @property
+    def docs(self) -> dict[str, str]:
+        """``file_path`` → lowercased text of every document, read from the ``reload`` source on first use."""
+        docs = self._docs
+        if docs is None:
+            with self._lock:
+                if self._docs is None:
+                    reload = self._reload
+                    assert reload is not None
+                    self._docs = {path: _keyword_text(body).lower() for path, body in reload()}
+                docs = self._docs
+        return docs
+
     def add(self, doc_id: str, text: str) -> None:
-        self.docs[doc_id] = text.lower()
-        self.doc_count = len(self.docs)
+        docs = self.docs
+        docs[doc_id] = text.lower()
+        self.doc_count = len(docs)
+        with self._lock:
+            self._vocabulary = None
+            self._memo = {}
 
     def search(self, query: str, limit: int = 10) -> list[tuple[str, float]]:
         """Return ``(doc_id, score)`` ranked by TF-IDF-like scoring."""
@@ -65,13 +158,14 @@ class KeywordIndex:
         if not terms:
             return []
 
+        docs = self.docs
         scores: dict[str, float] = {}
-        for doc_id, text in self.docs.items():
+        for doc_id, text in docs.items():
             score = 0.0
             for term in terms:
                 tf = text.count(term)
                 if tf > 0:
-                    df = sum(1 for d in self.docs.values() if term in d)
+                    df = sum(1 for d in docs.values() if term in d)
                     idf = math.log((self.doc_count + 1) / (df + 1))
                     score += (1 + math.log(tf)) * idf
             if score > 0:
@@ -81,17 +175,68 @@ class KeywordIndex:
         return ranked[:limit]
 
     def idf(self, term: str) -> float:
-        """Inverse document frequency of ``term``, with the smoothing ``search`` uses."""
+        """Inverse document frequency of ``term``, with the smoothing ``search`` uses.
+
+        The document frequency is the number of documents whose lowercased
+        text contains the lowercased term.
+        """
         needle = term.lower()
-        df = sum(1 for d in self.docs.values() if needle in d)
-        return math.log((self.doc_count + 1) / (df + 1))
+        memo = self._memo
+        value = memo.get(needle)
+        if value is None:
+            value = math.log((self.doc_count + 1) / (self._document_frequency(needle) + 1))
+            memo[needle] = value
+        return value
+
+    def _document_frequency(self, needle: str) -> int:
+        if needle.split() != [needle]:
+            # Empty, or holding whitespace: no query term is (``query.split()``
+            # never yields one), so the bodies are scanned as they always were.
+            return sum(1 for d in self.docs.values() if needle in d)
+        vocabulary = self._vocabulary
+        if vocabulary is None:
+            with self._lock:
+                if self._vocabulary is None:
+                    self._vocabulary = _RunVocabulary(self.docs.values())
+                vocabulary = self._vocabulary
+        return vocabulary.document_frequency(needle, self.doc_count)
 
     @classmethod
-    def from_bodies(cls, bodies: Iterator[tuple[str, str]]) -> KeywordIndex:
-        """One entry per ``(file_path, body)``."""
+    def from_bodies(
+        cls,
+        bodies: Iterable[tuple[str, str]],
+        *,
+        reload: Callable[[], Iterable[tuple[str, str]]] | None = None,
+    ) -> KeywordIndex:
+        """One entry per ``(file_path, body)``.
+
+        With ``reload`` (a source of the same pairs, such as a store's
+        ``bodies``), the lowercased bodies are not kept: only the vocabulary
+        ``idf`` needs, and ``docs`` reads them again from ``reload`` if asked.
+        """
         index = cls()
-        for file_path, body in bodies:
-            index.add(file_path, _keyword_text(body))
+        kept: dict[str, str] | None = {} if reload is None else None
+        paths: set[str] = set()
+        repeated = False
+
+        def texts() -> Iterator[str]:
+            nonlocal repeated
+            for file_path, body in bodies:
+                text = _keyword_text(body).lower()
+                if file_path in paths:
+                    repeated = True
+                paths.add(file_path)
+                if kept is not None:
+                    kept[file_path] = text
+                yield text
+
+        vocabulary = _RunVocabulary(texts())
+        index.doc_count = len(paths)
+        index._reload = reload
+        index._docs = kept
+        # A path given twice keeps its last body, as ``add`` does: the
+        # vocabulary counted both, so it is rebuilt from ``docs`` on first use.
+        index._vocabulary = None if repeated else vocabulary
         return index
 
 
@@ -293,7 +438,7 @@ class VaultIndexer:
         """TF-IDF over the bodies the store holds, built on first use after each index run."""
         with self._keyword_lock:
             if self._keyword_index is None:
-                self._keyword_index = KeywordIndex.from_bodies(self._store.bodies())
+                self._keyword_index = KeywordIndex.from_bodies(self._store.bodies(), reload=self._store.bodies)
             return self._keyword_index
 
     # -- public API ---------------------------------------------------------

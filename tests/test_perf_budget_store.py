@@ -9,17 +9,20 @@ Nothing is patched and nothing is timed.
 
 from __future__ import annotations
 
+import dataclasses
+import tracemalloc
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from perf_counters import count_calls, sql_trace
-from synthetic_vault import Manifest, generate
+from synthetic_vault import Manifest, generate, queries
 
-from knowledge import stores
+from knowledge import pointers, server, settings, stores
 from knowledge.embeddings import build_embedder
-from knowledge.indexer import VaultIndexer
+from knowledge.indexer import KeywordIndex, VaultIndexer, _keyword_text, _RunVocabulary
 from knowledge.ports import ChunkFilter, ChunkRecord, DocRecord
+from knowledge.registry import build_runtime
 from knowledge.stores import SQLiteStore
 
 DOCS = 300
@@ -132,3 +135,55 @@ def test_documents_without_body_never_read_the_body_column(indexer: VaultIndexer
         # The same statements otherwise, and the same rows (documents plus tags).
         assert len(lean.statements) == len(full.statements)
         assert lean.rows_fetched == full.rows_fetched
+
+
+# ---------------------------------------------------------------------------
+# 1.4 idf from a vocabulary of whitespace runs
+# ---------------------------------------------------------------------------
+
+
+def test_searches_never_materialize_the_bodies_and_each_term_is_scanned_once(
+    manifest: Manifest, tmp_path: Path
+) -> None:
+    spec = dataclasses.replace(settings.current().default_vault(), path=manifest.root, index_dir=tmp_path / "rt")
+    runtime = build_runtime(spec, embedder=build_embedder("none"))
+    try:
+        runtime.indexer.index()
+        asked = queries(manifest, seed=21, n=10, selectivity=0.02) + queries(manifest, seed=22, n=10, selectivity=None)
+        asked[3] = asked[3].upper()  # the same terms in another case are the same needles
+        asked.append(asked[0])  # a repeated query
+        with count_calls(_RunVocabulary.document_frequency) as scans:
+            answers = [server._query_idf(runtime, query) for query in asked]
+        keyword_index = runtime.indexer.keyword_index
+        assert keyword_index._docs is None, "no body was materialized"
+        needles = {term.lower() for query in asked for term in pointers.query_terms(query)}
+        assert scans.count("document_frequency") == len(needles)
+        assert all(value >= 0 for answer in answers for value in answer.values())
+    finally:
+        runtime.indexer.store.close()  # type: ignore[attr-defined]
+
+
+def test_the_vocabulary_holds_less_than_the_bodies_it_replaces(manifest: Manifest, tmp_path: Path) -> None:
+    built = _indexer(manifest, tmp_path / "index-none", provider="none")
+    try:
+        built.index()
+        bodies = list(built.store.bodies())
+    finally:
+        built.store.close()  # type: ignore[attr-defined]
+    tracemalloc.start()
+    try:
+        reference = {path: _keyword_text(body).lower() for path, body in bodies}  # what idf scanned before
+        held_before, _ = tracemalloc.get_traced_memory()
+        del reference
+        tracemalloc.reset_peak()
+        base, _ = tracemalloc.get_traced_memory()
+        index = KeywordIndex.from_bodies(iter(bodies), reload=lambda: iter(bodies))
+        held, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert index._docs is None
+    # What stays in memory between reindexes: well under half of the bodies.
+    assert held - base <= held_before // 2
+    # The build itself peaks near the size of the bodies on a small vault; the
+    # vocabulary grows sublinearly, so the peak falls below them as the vault grows.
+    assert peak - base <= held_before * 5 // 4
