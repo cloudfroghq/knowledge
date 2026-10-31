@@ -467,6 +467,8 @@ class SQLiteStore:
         self._local = threading.local()
         self._conns: list[sqlite3.Connection] = []
         self._conns_lock = threading.Lock()
+        self._trace: Callable[[str], None] | None = None
+        self._row_hook: Callable[[sqlite3.Cursor, tuple[Any, ...]], tuple[Any, ...]] | None = None
         self._vec: bool | None = None
         self._writer: sqlite3.Connection | None = self._connect()
         self._init_schema()
@@ -504,7 +506,36 @@ class SQLiteStore:
         conn.execute("PRAGMA busy_timeout=5000")
         with self._conns_lock:
             self._conns.append(conn)
+            self._instrument(conn)
         return conn
+
+    def _instrument(self, conn: sqlite3.Connection) -> None:
+        """Apply the observation hooks of :meth:`observe` to ``conn`` (the caller holds ``_conns_lock``)."""
+        conn.set_trace_callback(self._trace)
+        conn.row_factory = self._row_hook
+
+    def observe(
+        self,
+        *,
+        trace: Callable[[str], None] | None = None,
+        row: Callable[[sqlite3.Cursor, tuple[Any, ...]], tuple[Any, ...]] | None = None,
+    ) -> None:
+        """Attach read-only observers to every connection of this store, or detach them with no arguments.
+
+        ``trace`` receives each SQL statement a connection runs (SQLite's trace
+        callback: parameters expanded, one call per statement). ``row`` is a
+        ``row_factory``: called with the cursor and each fetched row, it must
+        return the row unchanged, so it sees exactly the rows a caller fetches.
+        Connections opened later (a reading thread's first query, a reopen after
+        :meth:`close`) get the same hooks, applied after their pragmas so a
+        connection's own setup is never counted. It exists for work-count tests
+        (``tests/perf_counters.py``); with no observer the store behaves as before.
+        """
+        with self._conns_lock:
+            self._trace = trace
+            self._row_hook = row
+            for conn in self._conns:
+                self._instrument(conn)
 
     def _reader(self) -> sqlite3.Connection:
         conn: sqlite3.Connection | None = getattr(self._local, "conn", None)
