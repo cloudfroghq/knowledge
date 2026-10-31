@@ -2,10 +2,10 @@
 
 No network and no real ``uvx``: the manifests are read as JSON, and the
 SessionStart hook runs against a stub that stands in for ``uvx``. The
-``@v<version>`` tag the ``.mcp.json`` names is checked against ``plugin.json``
-only; whether that tag already exists in the remote is the release check's job
-(``scripts/check-version.sh``), so a branch can carry the next version before
-its tag is cut.
+``cloudfrog-knowledge==<version>`` release the ``.mcp.json`` names is checked
+against ``plugin.json`` only; whether that release is already on PyPI is not
+checked here nor by ``scripts/check-version.sh`` (``publish.yml`` publishes it
+on the tag), so a branch can carry the next version before it exists.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ MCP_JSON = PLUGIN / ".mcp.json"
 HOOKS = PLUGIN / "hooks" / "hooks.json"
 HOOK_SCRIPT = PLUGIN / "scripts" / "session-start.sh"
 
-PACKAGE_SOURCE = "git+https://github.com/cloudfroghq/knowledge.git"
+PACKAGE_SOURCE = "cloudfrog-knowledge"
 TOOL_PREFIX = "mcp__plugin_knowledge_knowledge__"
 MEMORY_PREFIX = "mcp__plugin_memory_memory__"
 #: The prefix of the retired ``cloudfrog@cloudfrog`` install of memory. Nothing
@@ -90,7 +90,7 @@ def test_the_user_config_declares_the_two_options(manifest: dict[str, Any]) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_the_server_runs_the_tagged_package_over_stdio(
+def test_the_server_runs_the_pypi_release_over_stdio(
     server: dict[str, Any], manifest: dict[str, Any]
 ) -> None:
     assert server["type"] == "stdio"
@@ -100,15 +100,24 @@ def test_the_server_runs_the_tagged_package_over_stdio(
     # and would rank vectors with the slower standard-library fallback.
     assert args[:3] == ["--managed-python", "--python", "3.12"]
     assert args[3] == "--from"
-    assert args[4] == f"{PACKAGE_SOURCE}@v{manifest['version']}"
+    assert args[4] == f"{PACKAGE_SOURCE}=={manifest['version']}"
     assert args[5:] == ["cloudfrog-knowledge", "serve", "--transport", "stdio"]
 
 
 def test_the_source_pins_the_package_version() -> None:
-    # The release this plugin ships with, the one pyproject.toml declares; the tag may not exist yet.
+    # The release this plugin ships with, the one pyproject.toml declares; it may not be on PyPI yet.
     package = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = package["project"]["version"]
-    assert f"{PACKAGE_SOURCE}@v{version}" in MCP_JSON.read_text(encoding="utf-8")
+    assert f'"{PACKAGE_SOURCE}=={version}"' in MCP_JSON.read_text(encoding="utf-8")
+
+
+def test_the_source_is_pypi_and_not_a_repository() -> None:
+    # A PyPI release starts from a prebuilt wheel, warm in about 0.1 s; a repository source is cloned and built
+    # on a cold cache and revalidated on a warm one (about 0.5 s). The launcher must not reach for a repository.
+    text = MCP_JSON.read_text(encoding="utf-8")
+    assert "git+" not in text
+    assert "github.com" not in text
+    assert len(re.findall(r"cloudfrog-knowledge==\d+\.\d+\.\d+", text)) == 1
 
 
 def test_the_options_map_to_the_server_environment(server: dict[str, Any]) -> None:
@@ -287,6 +296,7 @@ def test_the_hook_is_silent_when_the_doctor_is_happy(tmp_path: Path) -> None:
     assert result.stdout == ""
     seen = record.read_text(encoding="utf-8").splitlines()
     spec = _json(MCP_JSON)["mcpServers"]["knowledge"]["args"][4]
+    assert re.fullmatch(r"cloudfrog-knowledge==\d+\.\d+\.\d+", spec)
     assert seen[:-1] == [
         "--quiet", "--managed-python", "--python", "3.12", "--from", spec, "cloudfrog-knowledge", "doctor", "--brief"
     ]
@@ -313,7 +323,7 @@ def test_the_hook_forwards_one_bounded_line_on_a_problem(tmp_path: Path) -> None
 
 _PACKAGE_FAILS = "echo 'git operation failed' >&2\nexit 2\n"
 _FAILED_PREFIX = (
-    "knowledge: server package failed (uvx rc 2); diagnose: uvx --managed-python --python 3.12 --from 'git+https://"
+    "knowledge: server package failed (uvx rc 2); diagnose: uvx --managed-python --python 3.12 --from 'cloudfrog-knowledge=="
 )
 
 
@@ -363,7 +373,7 @@ def test_the_marker_follows_xdg_cache_home(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "stale",
-    ["19990101 {spec}", "{today} git+https://github.com/cloudfroghq/knowledge.git@v0.0.1", ""],
+    ["19990101 {spec}", "{today} cloudfrog-knowledge==0.0.1", ""],
     ids=["another-day", "another-release", "empty"],
 )
 def test_a_stale_marker_reports_again(tmp_path: Path, stale: str) -> None:

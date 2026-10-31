@@ -13,13 +13,12 @@
 #
 # - A doctor that does not answer within the budget (a cold uv cache downloads
 #   the package) is silent: the next session reports instead.
-# - When uvx fails without any doctor output (no network, or a tag the remote
+# - When uvx fails without any doctor output (no network, or a release PyPI
 #   does not have), the "server package failed" line is printed once per day
 #   and per package spec. The marker is a one-line file under
 #   ${XDG_CACHE_HOME:-$HOME/.cache}/knowledge/. If the marker cannot be
 #   written, the line is printed on every start. The server shows as failed in
-#   /mcp in the meantime. Retrying with `uvx --offline` would not help: uv 0.10
-#   still fetches a git tag with that flag, so the cache alone cannot answer.
+#   /mcp in the meantime.
 #
 # When the doctor is happy, the hook also starts `cloudfrog-knowledge jira sync
 # --auto` in the background, detached from the hook: its own process group,
@@ -56,14 +55,15 @@ if ! command -v "$uvx" >/dev/null 2>&1; then
   exit 0
 fi
 
-# The package spec lives only in .mcp.json, so the hook can never check a
-# different release than the one the server runs.
+# The package spec (`cloudfrog-knowledge==X.Y.Z`, the PyPI release) lives only
+# in .mcp.json, so the hook can never check a different release than the one
+# the server runs. The command name `"cloudfrog-knowledge",` has no `==`.
 spec=
 while IFS= read -r line || [ -n "$line" ]; do
   case $line in
-    *'"git+'*)
-      rest=${line#*\"git+}
-      spec="git+${rest%%\"*}"
+    *'"cloudfrog-knowledge=='*)
+      rest=${line#*\"cloudfrog-knowledge==}
+      spec="cloudfrog-knowledge==${rest%%\"*}"
       break
       ;;
   esac

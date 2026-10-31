@@ -35,6 +35,7 @@ It is open source under the [MIT License](#license).
 - [Using a team deployment](#using-a-team-deployment)
 - [Operating the server](#operating-the-server)
 - [Call telemetry](#call-telemetry)
+- [Performance](#performance)
 - [Tests and merge gates (ring 1)](#tests-and-merge-gates-ring-1)
 - [Scripts](#scripts)
 - [Documentation](#documentation)
@@ -209,7 +210,7 @@ The package is published on PyPI (`cloudfrog-knowledge`), on npm (`@cloudfrog/kn
 | PyPI, install the tool | `uv tool install --managed-python --python 3.12 cloudfrog-knowledge`, then `knowledge doctor` |
 | npm | `npx @cloudfrog/knowledge doctor` (or `pnpm dlx @cloudfrog/knowledge doctor`, or `npm install -g @cloudfrog/knowledge`) |
 | Git tag | `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@vX.Y.Z cloudfrog-knowledge doctor` |
-| Claude Code plugin | `knowledge@cloudfroghq` or `knowledge-remote@cloudfroghq`, see [`docs/install.md`](docs/install.md) |
+| Claude Code plugin | `knowledge@cloudfroghq` (it launches the PyPI release: `uvx --managed-python --python 3.12 --from cloudfrog-knowledge==X.Y.Z cloudfrog-knowledge serve --transport stdio`) or `knowledge-remote@cloudfroghq`, see [`docs/install.md`](docs/install.md) |
 | Docker / Compose | `infra/compose.yml`, see below |
 
 - `vX.Y.Z` is a release tag; take the latest one from the [releases](https://github.com/cloudfroghq/knowledge/releases) or the PyPI badge above. Pin an exact version in scripts and `.mcp.json` files: `cloudfrog-knowledge==X.Y.Z`, `npx @cloudfrog/knowledge@X.Y.Z` or the tag `@vX.Y.Z`.
@@ -386,7 +387,7 @@ The `cloudfrog-knowledge` entry point (`knowledge.cli:main`) has nine subcommand
 | `serve [--transport stdio\|http] [--vaults FILE] [--profile all\|legacy]` | Starts the MCP server. The flags override `MCP_TRANSPORT`, `KNOWLEDGE_VAULTS` and `KNOWLEDGE_PROFILE`. | 2 on a configuration error (`E_PROFILE_UNKNOWN` with another profile) |
 | `eval <args...>` | Runs `scripts/eval_retrieval.py` with those arguments (`--stdio\|--http`, `--queries`, `--vault`, `--provider`, `--rerank`, `--json`, `--markdown`, ...). Needs a source checkout. Guide: [`docs/eval/README.md`](docs/eval/README.md). | the script's; 2 with `E_EVAL_UNAVAILABLE` if there is no `scripts/` |
 | `vault-lint PATH [--format json] [--rules 1.2\|1.3] [--fix [--out DIR]]` | Checks a vault and prints JSON on stdout (`vault`, `files`, `rules`, `ok`, `errors`, `warnings`). | 0 without errors, 1 with errors, 2 with `E_LINT_PATH_NOT_DIR`, or with `--fix` `E_WRITE_FENCED` and `E_ARGUMENT_CONFLICT` |
-| `doctor [--vaults FILE] [--brief] [--client]` | Read-only diagnosis of whether this installation can serve; JSON, or one line of up to 200 bytes with `--brief`. | 0 healthy (also with a pending `init`), 1 with problems, 2 if the configuration does not load |
+| `doctor [--vaults FILE] [--brief] [--client] [--shape]` | Read-only diagnosis of whether this installation can serve; JSON, or one line of up to 200 bytes with `--brief`. `--shape` prints only aggregate size distributions of the default vault, for calibrating the benchmarks. | 0 healthy (also with a pending `init`), 1 with problems, 2 if the configuration does not load |
 | `init [--vaults FILE] [--vault SLUG] [--root [SLUG:]NAME=DIR] [--search-dir DIR] [--max-depth N] [--repo [SLUG:]ID] [--all] [--drop [SLUG:]ID] [--yes] [--dry-run] [--json] [--force\|--refresh] [--exclude local\|gitignore]` | Client side: installs each vault's context packages into the checkouts selected on this machine. | 0; 1 on an unreadable vault or a conflict; 2 with `E_ROOT_UNKNOWN`, `E_CONTEXTS_REPO_UNKNOWN` or a configuration error |
 | `migrate-index [--vaults FILE] [--vault SLUG] [--from-chroma DIR] [--build] [--prune-chroma]` | Prepares each vault's `index.sqlite` and copies the Chroma sidecars. | 0; 2 with `E_INDEX_VERSION_NEWER`, `E_INDEX_UNREADABLE` or `E_PRUNE_REFUSED` |
 | `confluence export [--vaults FILE] [--vault SLUG] [--out DIR] [--space KEY] [--scope-prefix PREFIX] [--dry-run]` | Writes Confluence pages newer than the vault, outside every vault. | 0; 1 if the report has an error; 2 with `E_WRITE_FENCED`, `E_SECRET_MISSING` or an unknown vault |
@@ -659,7 +660,7 @@ docker compose --profile memory up -d --build
 
 The server counts every `tools/call` it receives, including those that end in error (`isError`), in the `tool_calls` section of the default vault's `usage_stats.json`. Each count carries the UTC day, the tool name, the client (the `clientInfo.name` that the session's `initialize` sent, the name each client picks for itself) and the principal: the bearer id over HTTP (`service`, `service-read`, `admin` or the `id` of a `bearers` entry) and `stdio` over stdio. It never stores arguments, queries, paths or the bearer. Names are reduced to ASCII letters, digits, `.`, `_` and `-` (anything else becomes `_`); an empty name is stored as `unknown`, and beyond 64 tools, 32 clients per tool or 16 principals per client on the same day, new names count under `other`. Counts are kept for 120 days.
 
-Counting changes no response and not the contract: if counting fails, the server logs it and the call goes on. Each process adds its own counts to what is already in the file, under the same lock as the judge's spending, so several processes on one vault do not trample each other. Counts are written every 20 usage events and when the process closes; a process that dies without closing loses the ones it had not written yet.
+Counting changes no response and not the contract: if counting fails, the server logs it and the call goes on. Each process adds its own counts to what is already in the file, under the same lock as the judge's spending, so several processes on one vault do not trample each other. The server writes them on a background thread at most every 2 seconds, and when the process closes or exits; a process killed hard loses the counts of its last 2 seconds or so. Each call is also timed: the `tool_latency` section keeps, per UTC day and tool, a histogram over fixed buckets (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000 and 5000 ms, then `inf`) for the same 120 days, with no client, principal or argument. A binary older than this section drops it when it rewrites the file.
 
 `doctor` reads them without writing anything, in `vaults[i].tool_calls` of the vault with `"default": true`:
 
@@ -669,8 +670,123 @@ Counting changes no response and not the contract: if counting fails, the server
 | `first_day`, `last_day`, `days_kept` | First and last day with calls, and the retention (120) |
 | `deprecated` | Calls, over everything kept, to a tool the contract marks `knowledge/deprecated` (`search_code`, retired in 2.0.0: under `all` its `E_TOOL_RETIRED` counts, under `legacy` its redirect) |
 | `unregistered` | Calls to a name the contract does not define (a client with an old catalog, or a probe) |
+| `latency_ms` | Only once some call was timed: per tool, over every kept day, `calls`, `p50` and `p95` (the upper bound of the bucket, in ms; `null` in the open bucket) |
 
 The procedure to read them on a deployment is in [`docs/runbooks/serve-multiple-vaults.md`](docs/runbooks/serve-multiple-vaults.md), section "Reading per-tool calls".
+
+## Performance
+
+Wall-clock numbers for the phase 0 and 1 performance work (`perf/phase-0-1`, unreleased after 0.9.0) against its base, 0.9.0 at `a89cd5e`, measured with the `benchmarks/` harness. The change is contract class A: every response is byte-identical to the base (the frozen goldens pass untouched) and the contract stays `2.0.0`. The numbers are milliseconds unless a header or a cell says otherwise; "selective" and "Zipf" queries are defined under the first table.
+
+### Conditions
+
+- Machine: 4 vCPU Intel Xeon @ 2.10 GHz, 15.7 GiB, Linux 6.18, idle at the start. Wall clock on that VM is good to about 10-15 %.
+- Both sides on the same interpreter: CPython 3.12.3, SQLite 3.45.1, `sqlite-vec` 0.1.9.
+- Generated vaults, seed 7: 500 documents (1,370 chunks) and 5,000 documents (14,364 chunks, 85 MiB index). `bag-of-words` embeddings, no network.
+- pyperf 2.10.0, 200 calls per scenario after a warm-up.
+
+### Search and retrieval
+
+A selective query has each word in about 2 % of the documents (`sel0.02` in the harness); a Zipf query is the old baseline, where a query hits about 85 % of the chunks and is an upper bound of what real queries cost.
+
+| Scenario | Docs | p50 before | p50 after | Δ p50 | p95 before | p95 after |
+|---|---:|---:|---:|---:|---:|---:|
+| `search`, hybrid, selective query | 500 | 8.60 | 4.85 | -43.6% | 12.1 | 6.18 |
+| `search`, hybrid, selective query | 5,000 | 51.4 | 5.70 | -88.9% | 64.9 | 8.14 |
+| `search`, hybrid, Zipf query | 500 | 14.9 | 11.0 | -26.3% | 32.9 | 15.7 |
+| `search`, hybrid, Zipf query | 5,000 | 108 | 79.4 | -26.6% | 145 | 133 |
+| `search`, `limit=20` with snippet, selective query | 500 | 26.7 | 11.0 | -59.0% | 35.8 | 17.1 |
+| `search`, `limit=20` with snippet, selective query | 5,000 | 62.5 | 14.3 | -77.1% | 80.2 | 22.8 |
+| `search`, `limit=20` with snippet, Zipf query | 500 | 43.1 | 20.9 | -51.5% | 55.6 | 30.7 |
+| `search`, `limit=20` with snippet, Zipf query | 5,000 | 117 | 88.2 | -24.7% | 153 | 132 |
+| `context_pack`, selective query | 500 | 13.1 | 7.47 | -43.1% | 31.6 | 10.7 |
+| `context_pack`, selective query | 5,000 | 55.9 | 8.86 | -84.1% | 70.6 | 16.8 |
+| `context_pack`, Zipf query | 500 | 18.3 | 12.8 | -30.5% | 46.4 | 19.6 |
+| `context_pack`, Zipf query | 5,000 | 108 | 84.0 | -22.3% | 153 | 130 |
+| `search_deep`, selective query | 500 | 44.8 | 30.5 | -31.9% | 65.8 | 45.6 |
+| `search_deep`, selective query | 5,000 | 693 | 690 | -0.4% | 788 | 801 |
+| `search_deep`, Zipf query | 500 | 55.1 | 39.7 | -28.0% | 81.7 | 53.3 |
+| `search_deep`, Zipf query | 5,000 | 752 | 791 | +5.3% | 867 | 957 |
+
+### Reading
+
+| Scenario | Docs | p50 before | p50 after | Δ p50 | p95 before | p95 after |
+|---|---:|---:|---:|---:|---:|---:|
+| `get_document` by `chunk_id` | 500 | 0.88 | 0.87 | -1.1% | 21.8 | 1.25 |
+| `get_document` by `chunk_id` | 5,000 | 1.03 | 1.12 | +8.6% | 4.02 | 1.62 |
+| `get_document` by `file_path` | 500 | 0.67 | 0.78 | +16.4% | 21.5 | 1.10 |
+| `get_document` by `file_path` | 5,000 | 0.82 | 1.06 | +29.5% | 3.12 | 1.58 |
+
+At these sizes the p50 of `get_document` is sub-millisecond and moved within noise (the comparison flags the `file_path` rows only because 0.67 to 0.78 ms is a 16 % change of a tenth of a millisecond). What changed is the tail: the usage file is no longer rewritten on the request thread, so p95 drops from about 21 ms to about 1 ms at 500 documents.
+
+### Indexing
+
+Milliseconds for the whole `VaultIndexer.index()` call.
+
+| Scenario | Docs | p50 before | p50 after | Δ p50 | p95 before | p95 after |
+|---|---:|---:|---:|---:|---:|---:|
+| Full build | 500 | 981 | 645 | -34.3% | – | – |
+| Full build | 5,000 | 18,611 | 6,596 | -64.6% | – | – |
+| Reindex, nothing changed | 500 | 134 | 125 | -6.8% | – | – |
+| Reindex, nothing changed | 5,000 | 1,436 | 1,524 | +6.2% | – | – |
+| Reindex, one file changed | 500 | 140 | 136 | -2.9% | – | – |
+| Reindex, one file changed | 5,000 | 1,469 | 1,478 | +0.6% | – | – |
+
+The first build writes one transaction per embedding batch instead of one per document and no longer deletes vectors that do not exist yet. A reindex with nothing to do, or with one changed file, did not change.
+
+### Startup and CLI
+
+| Scenario | Docs | p50 before | p50 after | Δ p50 | p95 before | p95 after |
+|---|---:|---:|---:|---:|---:|---:|
+| `doctor --brief` | – | 812 | 185 | -77.3% | – | – |
+| `import knowledge.cli` | – | 594 | 116 | -80.5% | – | – |
+| stdio `search` | – | 14.0 | 7.71 | -44.9% | 42.0 | 8.74 |
+| stdio `list_vaults` | – | 2.06 | 1.93 | -6.1% | 14.9 | 2.23 |
+
+Over stdio the figures come from a real server on the smallest vault's index. Separately from the harness, the plugin launcher (`uvx --from cloudfrog-knowledge==<version> … python -c pass`) went from 536 to 92 ms warm (median of 10) and from 10.0 to 3.7 s cold (one sample, network-dependent). It takes effect with the first plugin release after 0.9.0.
+
+### Trade-offs
+
+Two costs came with the gains, and one expected gain did not show up. They are stated here rather than left to the tables.
+
+| Cost | Docs | Before | After | Δ |
+|---|---:|---:|---:|---:|
+| `search`, first call after start or reindex (ms) | 500 | 66.8 | 104 | +55.4% |
+| `search`, first call after start or reindex (ms) | 5,000 | 447 | 831 | +85.9% |
+| stdio `search`, first call (ms) | – | 26.5 | 98.9 | +273.6% |
+| RSS after the tool mix (MiB) | 500 | 109 | 147 | +35.0% |
+| RSS after the tool mix (MiB) | 5,000 | 160 | 437 | +172.2% |
+
+- **First `search` after a start or a reindex.** The keyword `idf` now comes from a vocabulary built lazily by that first search, instead of a dictionary held in memory. The build costs about 0.75 s at 5,000 documents once, then every search then saves about 35 ms of `idf` work at that size; it pays for itself in about 20 searches per reindex. Memory held between reindexes fell from 24.9 to 6.9 MB at 5,000 documents.
+- **Resident memory.** Every connection now maps the index with `PRAGMA mmap_size` (256 MiB), which makes lexical queries 18 to 22 % faster on the 85 MiB index. All of the RSS increase is file-backed mapped pages that the kernel can reclaim; anonymous memory fell from 116.7 to 97.5 MiB. The other cost, a SIGBUS instead of a `sqlite3.Error` on an I/O error of a mapped page, is recorded at `MMAP_SIZE` in `src/knowledge/stores.py`.
+- **`search_deep` at 5,000 documents** is unchanged within noise (693 to 690 ms and 752 to 791 ms at p50): the work removed here is not what that tool spends its time on.
+
+Rows with no code of this work on their path moved within noise and are omitted: the interpreter floor, spawn to `initialize`, the first `tools/list`, the sub-millisecond `get_document` p50 and the micro-timings of the usage flush and `record_search`. The comparison flags a few of them (the interpreter floor 18.4 to 23.8 ms, the first `tools/list` 2.59 to 3.47 ms, in-child `import knowledge.server` 574 to 716 ms); the same import under pyperf, which includes interpreter start-up, moved 790 to 853 ms (+7.9 %), and they are not attributed to this work. The raw comparison is 55 rows and is not committed; the result of each item, with its commits, is in [`docs/performance/improvement-plan.md`](docs/performance/improvement-plan.md).
+
+### Deterministic work counts
+
+These are exact counts, not timings, and the suite fences them (`tests/test_perf_budgets.py` and `tests/test_perf_budget_*.py`), so they hold on any machine.
+
+| Work | Before | After |
+|---|---:|---:|
+| First build, 60 documents: statements / commits / `chunks_vec` deletes | 1,039 / 60 / 59 | 929 / 5 / 0 |
+| First build, 500 documents: commits | 500 | 41 |
+| First build, 5,000 documents: commits / statements | 5,000 / 93,105 | 421 / 83,947 |
+| `docs.body` rows read by `search` (5 or 13), `context_pack` (22), `search_deep` (63), `search_by_metadata` (10) | 5 / 13 / 22 / 63 / 10 | 0 |
+| Reads of `usage_stats.json` per flush | 2 | 1 |
+| Usage-file writes on request threads (700 calls, 500 documents) | 155 | 0 |
+| `knowledge` modules imported by `--version` / `doctor --brief` | 27 / 27 | 15 / 22 |
+| Keyword `idf` memory held between reindexes, 5,000 documents | 24.9 MB | 6.9 MB |
+| `link_graph.json`, 500 documents | 153 KB | 121 KB |
+
+### Reproduce
+
+```bash
+uv run --with pyperf==2.10.0 python -m benchmarks run --docs 500,5000
+uv run python -m benchmarks compare BASE.json HEAD.json
+```
+
+Results go to `.data/bench/` and are never committed. A base commit is run from a `git archive` of it, and both sides must use the same interpreter and the same SQLite: a fresh base checkout gets its own `.venv`, and `uv` may pick a different Python for it, which shows up as a false regression in every Python-heavy scenario (see [Comparing two commits](docs/performance/benchmarks.md#comparing-two-commits)). `compare` does not check it, so compare `meta.python` and `meta.sqlite` in both result files. Every scenario, the result schema and the proposed SLOs are in [`docs/performance/benchmarks.md`](docs/performance/benchmarks.md); what was done, in which commits, and what is next is in [`docs/performance/improvement-plan.md`](docs/performance/improvement-plan.md).
 
 ## Tests and merge gates (ring 1)
 
@@ -703,7 +819,7 @@ The workflow has `permissions: contents: read`, reads no secret and pins each ac
 
 The weekly stale-documents report does not run here: each vault runs it in its own workflow, which fetches `scripts/weekly-stale-report.py` and `scripts/notify-stale-report.sh` from this repository, pinned by commit or tag. It is never a gate and never writes in the vault.
 
-`.github/workflows/release-check.yml` verifies a release: it runs on every pushed `v*` tag and by hand. It reads no secrets or environments, and its token is read-only. It checks, in this order: that `pyproject.toml`, `plugin.json`, the `@v<version>` of `.mcp.json`, `npm/package.json` and `uv.lock` agree (`scripts/check-version.sh`, which also compares the tag when the ref is a tag; from a branch there is no tag and it compares only the files); that each `tests/golden/v*/SHA256SUMS` holds and that `test_contract_frozen.py`, `test_contract_golden.py` and `test_plugin_manifest.py` pass with `sqlite-vec` loaded; that `claude plugin validate --strict plugin/claude-code` passes (Node 22 and Claude Code `2.1.296`, pinned exactly); and that the sdist and the wheel build and carry only the package (`tests/test_sdist_contents.py`). Running `uv build --out-dir <temporary dir outside the repo>` locally is fine as a packaging check, but `dist/` is never committed and a locally built artifact is never uploaded: every published sdist and wheel is built and published only by `.github/workflows/publish.yml` on the runner, and this workflow checks them. A dispatch uses the workflow of the ref you choose: `gh workflow run release-check.yml --ref main` works, a tag older than `release-check.yml` does not (it lacks the file). Whoever cuts the release waits for the tag run to go green before opening the marketplace pull request (`cloudfroghq/claude-plugins`).
+`.github/workflows/release-check.yml` verifies a release: it runs on every pushed `v*` tag and by hand. It reads no secrets or environments, and its token is read-only. It checks, in this order: that `pyproject.toml`, `plugin.json`, the `cloudfrog-knowledge==<version>` of `.mcp.json`, `npm/package.json` and `uv.lock` agree (`scripts/check-version.sh`, which also compares the tag when the ref is a tag; from a branch there is no tag and it compares only the files); that each `tests/golden/v*/SHA256SUMS` holds and that `test_contract_frozen.py`, `test_contract_golden.py` and `test_plugin_manifest.py` pass with `sqlite-vec` loaded; that `claude plugin validate --strict plugin/claude-code` passes (Node 22 and Claude Code `2.1.296`, pinned exactly); and that the sdist and the wheel build and carry only the package (`tests/test_sdist_contents.py`). Running `uv build --out-dir <temporary dir outside the repo>` locally is fine as a packaging check, but `dist/` is never committed and a locally built artifact is never uploaded: every published sdist and wheel is built and published only by `.github/workflows/publish.yml` on the runner, and this workflow checks them. A dispatch uses the workflow of the ref you choose: `gh workflow run release-check.yml --ref main` works, a tag older than `release-check.yml` does not (it lacks the file). Whoever cuts the release waits for the tag run to go green, and for `publish.yml` to have published that version to PyPI (the plugin launches it from there), before opening the marketplace pull request (`cloudfroghq/claude-plugins`).
 
 `.github/workflows/publish.yml` publishes each `v*` tag to PyPI (`cloudfrog-knowledge`) and npm (`@cloudfrog/knowledge`). A first job, with no permission beyond reading the repository, compares the tag with every version, checks the `uv` checksums the npm package carries against the `uv` release and installs it with the package's own code, runs `node --test` and `npm pack --dry-run` in `npm/`, builds the sdist and the wheel, installs the wheel in a clean Python 3.12 environment, and requires `cloudfrog-knowledge --version` and `knowledge --version` to print the version. Only then does the second job, with the `release` environment and `id-token: write`, publish by trusted publishing (OIDC, no secrets): PyPI with `uv publish --trusted-publishing always` and npm with `npm publish --provenance --access public`. Each registry is skipped, with a warning, only if that exact version already exists; any other answer fails it. By hand, `gh workflow run publish.yml --ref main` builds and verifies without publishing. Operating it, the first manual `npm publish` and the trusted-publisher setup are in [`docs/runbooks/ci-ring1.md`](docs/runbooks/ci-ring1.md), section 7.
 
@@ -713,6 +829,8 @@ Two things to read carefully before trusting a green run:
 - **Semgrep scans only files tracked by git.** In a workflow run that is the whole tree; on your machine, with unadded work, it is not, and the count of scanned files will be lower.
 
 The gates have their own canary battery, which breaks each gate on purpose and requires the exact failure; see [CONTRIBUTING.md](CONTRIBUTING.md#gate-canaries).
+
+Performance is fenced in the suite by deterministic work counts (SQL statements and rows, files opened, YAML parses; never a clock) in `tests/test_perf_budgets.py` and `tests/test_perf_budget_*.py`. Wall-clock numbers come from the `benchmarks/` harness (`uv run python -m benchmarks run`, then `compare`), which is not a gate; how to run it against a base commit, the result schema and the proposed SLOs are in [`docs/performance/benchmarks.md`](docs/performance/benchmarks.md), and the before/after results of the phase 0 and 1 work are in [Performance](#performance).
 
 ## Scripts
 
@@ -744,7 +862,8 @@ These scripts are for local stdio mode. On a server the index lives in the `know
 | [`docs/contract/CHANGELOG.md`](docs/contract/CHANGELOG.md) | Tool contract history, version by version |
 | [`docs/adr/`](docs/adr/) | Architecture decision records (ADR-039 to ADR-050) |
 | [`docs/eval/README.md`](docs/eval/README.md) | Retrieval evaluation harness |
-| [`docs/performance/improvement-plan.md`](docs/performance/improvement-plan.md) | Performance improvement plan |
+| [`docs/performance/improvement-plan.md`](docs/performance/improvement-plan.md) | Performance improvement plan and the status of each item |
+| [`docs/performance/benchmarks.md`](docs/performance/benchmarks.md) | Benchmark harness, work budgets and SLOs |
 | [`docs/architecture.mmd`](docs/architecture.mmd) | Architecture diagram source |
 | [`scripts/README.md`](scripts/README.md) | Scripts guide |
 | [`lab/README.md`](lab/README.md) | Dockerized lab with fake tenants and clients |

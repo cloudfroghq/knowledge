@@ -122,7 +122,12 @@ The function receives each repository as an argument so that it works the same i
 1. The release pull request (`scripts/bump-version.sh X.Y.Z`) passes ring1 and is merged.
 2. Before pushing the tag, rehearse on `main` with the same file the tag will use: `gh workflow run release-check.yml -R cloudfroghq/knowledge --ref main` and `gh workflow run publish.yml -R cloudfroghq/knowledge --ref main` (builds and verifies without publishing), and `gh run watch` each one. Without a tag, `check-version.sh` compares only the files.
 3. `git push origin v<x.y.z>` on the merge (signed tag, section 7). The tag run additionally compares the tag with the versions, and `publish.yml` publishes to PyPI and npm.
-4. Only with `release-check` green is the `cloudfroghq/claude-plugins` pull request opened that moves the marketplace to the new tag.
+4. Only with `release-check` green, and with `publish.yml` done publishing that version to PyPI, is the `cloudfroghq/claude-plugins` pull request opened that moves the marketplace to the new tag. The plugin's `.mcp.json` and its `SessionStart` hook launch `uvx --managed-python --python 3.12 --from cloudfrog-knowledge==<x.y.z>`: a plugin version whose package is not on PyPI yet fails to start for every user who updates. `release-check` does not check PyPI (it would race `publish.yml` on the same tag); check it by hand before opening the pull request:
+
+   ```bash
+   gh run watch "$(gh run list -R cloudfroghq/knowledge -w publish -e push -L1 --json databaseId --jq '.[0].databaseId')" -R cloudfroghq/knowledge --exit-status
+   uvx --managed-python --python 3.12 --from cloudfrog-knowledge==<x.y.z> cloudfrog-knowledge --version   # cloudfrog-knowledge <x.y.z>
+   ```
 
 ```bash
 RUN=$(gh run list -R cloudfroghq/knowledge -w release-check -e push -L1 --json databaseId --jq '.[0].databaseId')
@@ -190,6 +195,8 @@ Each `v<x.y.z>` tag goes out through three channels with the same version: the t
    uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v<x.y.z> cloudfrog-knowledge --version
    npm view @cloudfrog/knowledge@<x.y.z> dist.attestations                                       # provenance (the first version does not have it)
    ```
+
+6. Only now open the marketplace pull request (`cloudfroghq/claude-plugins`): the plugin launches the PyPI release (`--from cloudfrog-knowledge==<x.y.z>`), so the PyPI check of step 5 must have printed the version first (section 6, step 4).
 
 ### If something fails
 

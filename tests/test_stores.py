@@ -12,6 +12,7 @@ the vectors and not the standard-library fallback.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import sqlite3
 import subprocess
@@ -188,6 +189,68 @@ def test_a_vector_of_another_dimension_is_refused(store: Any) -> None:
     assert "x.md" not in store.file_hashes(), "a refused write leaves nothing behind"
 
 
+def _observable(store: Any) -> Any:
+    return (
+        store.count(), store.documents(), sorted(store.file_hashes().items()),
+        store.chunks([doc.file_path for doc, _, _ in CORPUS]), store.get_meta().get("dim"),
+        store.knn([0.8, 0.6, 0.0], 10), store.knn([0.0, 0.0, 1.0], 2, ChunkFilter(exclude_types=("memory",))),
+        store.lexical("middleware", 10), store.lexical("gateway outage", 2, ChunkFilter(tag="gateway")),
+    )
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_replace_files_stores_what_replace_file_stores_one_by_one(kind: str, tmp_path: Path) -> None:
+    if kind == "sqlite":
+        _require_vec()
+    one_by_one, batched = _open(kind, tmp_path / "one"), _open(kind, tmp_path / "batch")
+    try:
+        _load(one_by_one)
+        batched.replace_files([(doc, _chunks(doc.file_path, *texts), vectors) for doc, texts, vectors in CORPUS])
+        assert _observable(batched) == _observable(one_by_one)
+        # Replacing documents already stored, and a keyword-only one, in one batch.
+        doc = CORPUS[0][0]
+        items = [(doc, _chunks(doc.file_path, "# Middleware\nshorter now"), [[0.0, 1.0, 0.0]]),
+                 (_doc("Plain.md"), _chunks("Plain.md", "keyword only text"), None),
+                 (CORPUS[1][0], _chunks(CORPUS[1][0].file_path, "a", "b"), [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])]
+        for item in items:
+            one_by_one.replace_file(*item)
+        batched.replace_files(items)
+        assert _observable(batched) == _observable(one_by_one)
+        batched.replace_files([])
+        assert _observable(batched) == _observable(one_by_one)
+    finally:
+        for opened in (one_by_one, batched):
+            if isinstance(opened, SQLiteStore):
+                opened.close()
+
+
+def test_a_failing_item_writes_nothing_of_its_batch(store: Any) -> None:
+    _load(store)
+    before = _observable(store)
+    good = (_doc("New.md"), _chunks("New.md", "brand new middleware text"), [[0.0, 1.0, 0.0]])
+    replaced = (CORPUS[0][0], _chunks(CORPUS[0][0].file_path, "changed"), [[0.0, 0.0, 1.0]])
+    wrong_dim = (_doc("x.md"), _chunks("x.md", "x"), [[1.0, 0.0]])
+    with pytest.raises(ValueError, match="dimension"):
+        store.replace_files([good, replaced, wrong_dim])
+    assert _observable(store) == before
+    assert "New.md" not in store.file_hashes()
+
+
+def test_a_failing_batch_rolls_back_in_sqlite(tmp_path: Path) -> None:
+    _require_vec()
+    store = _load(SQLiteStore.open(tmp_path))
+    try:
+        before = _observable(store)
+        good = (_doc("New.md"), _chunks("New.md", "brand new"), [[0.0, 1.0, 0.0]])
+        duplicate_ord = [ChunkRecord(file_path="Runbooks/Outage.md", ord=0, text="a"),
+                         ChunkRecord(file_path="Runbooks/Outage.md", ord=0, text="b")]
+        with pytest.raises(sqlite3.IntegrityError):
+            store.replace_files([good, (CORPUS[1][0], duplicate_ord, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])])
+        assert _observable(store) == before
+    finally:
+        store.close()
+
+
 def test_a_document_without_vectors_is_searchable_by_keywords_only(store: Any) -> None:
     store.replace_file(_doc("Plain.md"), _chunks("Plain.md", "keyword only text"), None)
     assert store.count() == 1
@@ -233,6 +296,23 @@ def test_documents_are_filtered_and_ordered_by_path(store: Any, flt: ChunkFilter
     _load(store)
     expected = sorted((doc for doc, _, _ in CORPUS if flt is None or flt.admits(doc)), key=lambda d: d.file_path)
     assert store.documents(flt) == expected
+
+
+@pytest.mark.parametrize("flt", _FILTERS, ids=[repr(f) for f in _FILTERS])
+def test_documents_without_body_differ_only_in_the_body(store: Any, flt: ChunkFilter | None) -> None:
+    _load(store)
+    with_body = store.documents(flt)
+    without = store.documents(flt, with_body=False)
+    assert without == [dataclasses.replace(doc, body="") for doc in with_body]
+    assert store.documents(flt, with_body=True) == with_body
+    assert [doc.metadata() for doc in without] == [doc.metadata() for doc in with_body]
+    assert all(doc.body == "" for doc in without)
+
+
+@pytest.mark.parametrize("flt", _FILTERS, ids=[repr(f) for f in _FILTERS])
+def test_both_stores_agree_on_documents_without_body(both: tuple[Any, Any], flt: ChunkFilter | None) -> None:
+    memory, sqlite = (_load(s) for s in both)
+    assert sqlite.documents(flt, with_body=False) == memory.documents(flt, with_body=False)
 
 
 def test_tags_keep_their_order_and_duplicates(store: Any) -> None:
