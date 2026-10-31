@@ -4,13 +4,14 @@
 # Usage: scripts/check-version.sh [vX.Y.Z]
 #
 # Compared: `version` in pyproject.toml, `version` in
-# plugin/claude-code/.claude-plugin/plugin.json, the `@v<version>` ref of the
+# plugin/claude-code/.claude-plugin/plugin.json, the `cloudfrog-knowledge==<version>`
 # package source in plugin/claude-code/.mcp.json, `version` in npm/package.json
 # (the npm wrapper runs the PyPI release of its own version) and, when uv.lock
 # exists, the locked version of the project itself. The tag is compared too when it is
 # given as the argument or, without an argument, when HEAD carries a `v*` tag;
 # with neither, the tag check is skipped, so a release branch passes before its
-# tag exists. Read-only. Exit status: 0 when everything agrees, 1 otherwise,
+# tag exists. It reads files only: whether the release is already on PyPI is not
+# checked here, because publish.yml publishes it on the same tag. Read-only. Exit status: 0 when everything agrees, 1 otherwise,
 # 2 on a usage error or an unreadable file.
 #
 # KNOWLEDGE_ROOT points the check at another checkout (the tests use it).
@@ -73,9 +74,9 @@ def plugin_version() -> str:
 
 
 def mcp_ref() -> str:
-    found = re.findall(rf"knowledge\.git@v({SEMVER})\"", read("plugin/claude-code/.mcp.json"))
+    found = re.findall(rf"cloudfrog-knowledge==({SEMVER})\"", read("plugin/claude-code/.mcp.json"))
     if len(found) != 1:
-        fail(".mcp.json must name the package source exactly once as ...knowledge.git@vX.Y.Z")
+        fail(".mcp.json must name the package source exactly once as cloudfrog-knowledge==X.Y.Z")
     return found[0]
 
 

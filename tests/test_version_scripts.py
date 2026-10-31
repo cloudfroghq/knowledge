@@ -65,8 +65,8 @@ def _tree(
     manifest.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     mcp = root / "plugin" / "claude-code" / ".mcp.json"
     text = mcp.read_text(encoding="utf-8")
-    current = json.loads(text)["mcpServers"]["knowledge"]["args"][4].rsplit("@v", 1)[1]
-    mcp.write_text(text.replace(f"@v{current}", f"@v{plugin}"), encoding="utf-8")
+    current = json.loads(text)["mcpServers"]["knowledge"]["args"][4].rsplit("==", 1)[1]
+    mcp.write_text(text.replace(f"cloudfrog-knowledge=={current}", f"cloudfrog-knowledge=={plugin}"), encoding="utf-8")
     return root
 
 
@@ -185,7 +185,7 @@ def test_bump_moves_every_place_and_nothing_else(tmp_path: Path) -> None:
     assert manifest["version"] == "0.3.1"
     assert manifest["userConfig"]  # the rest of the manifest survives
     mcp = json.loads((root / "plugin" / "claude-code" / ".mcp.json").read_text())
-    assert mcp["mcpServers"]["knowledge"]["args"][4].endswith("knowledge.git@v0.3.1")
+    assert mcp["mcpServers"]["knowledge"]["args"][4] == "cloudfrog-knowledge==0.3.1"
     package = json.loads((root / "npm" / "package.json").read_text(encoding="utf-8"))
     assert package["version"] == "0.3.1"
     assert package["bin"]  # the rest of the manifest survives
