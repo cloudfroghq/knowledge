@@ -53,9 +53,9 @@ or corrupted, everything regenerates from scratch — no data loss.
 Writing the overlay: every write reads the file once, merges the shared daily
 spend and the tool calls on disk, and replaces it atomically under the file
 lock. A tracker built with ``flush_interval_s`` (what the registry builds)
-writes on a daemon thread named ``usage-flush``, 20 hits or ``flush_interval_s``
-after the first pending one, so a request thread only copies the counters in
-memory and never waits on the file; ``close()`` (also run at interpreter exit)
+writes on a daemon thread named ``usage-flush``, ``flush_interval_s`` after the
+first pending hit and at most once per interval, so a request thread only
+records in memory and never waits on the file; ``close()`` (also run at interpreter exit)
 writes what is still pending. A hard crash loses at most one interval of
 counts. A paid judge call still writes at once, because the shared daily cap
 depends on it.
@@ -495,10 +495,10 @@ class UsageTracker:
     Inline (``flush_interval_s=None``, the default): the call that records the
     20th hit since the last write writes the file, on its own thread, after it
     has let go of the tracker's lock. Background (``flush_interval_s`` seconds):
-    the recording call only signals a daemon thread named ``usage-flush``,
-    which writes once 20 hits are pending or ``flush_interval_s`` after the
-    first pending one, whichever comes first. :meth:`close` stops that thread
-    and writes what is left; it also runs at interpreter exit.
+    the recording call only wakes a daemon thread named ``usage-flush``, which
+    writes ``flush_interval_s`` after the first pending hit, so at most once per
+    interval however busy the tracker is. :meth:`close` stops that thread and
+    writes what is left; it also runs at interpreter exit.
 
     A write takes the in-memory state under ``_lock`` as copies, and reads,
     encodes and replaces the file outside it, so recording never waits on file
@@ -518,7 +518,6 @@ class UsageTracker:
         self._flush_lock = threading.Lock()
         self._interval = flush_interval_s
         self._flusher: threading.Thread | None = None
-        self._due = False
         self._closed = False
         self._dirty_hits = 0
         # file_path -> {"uses": float, "last_used": iso}
@@ -837,15 +836,17 @@ class UsageTracker:
         if self._flusher is None:
             self._flusher = threading.Thread(target=self._run_flusher, name="usage-flush", daemon=True)
             self._flusher.start()
-        if self._dirty_hits >= _FLUSH_EVERY_HITS:
-            self._due = True
-            self._wake.notify()
-        elif self._dirty_hits == hits:  # the first pending hit starts the interval
+        if self._dirty_hits == hits:  # the first pending hit starts the interval
             self._wake.notify()
         return False
 
     def _run_flusher(self) -> None:
-        """The ``usage-flush`` thread: write once 20 hits are pending or an interval after the first one."""
+        """The ``usage-flush`` thread: write one interval after the first pending hit, at most once per interval.
+
+        Never at a hit count: under load that would write as often as the
+        inline tracker, and encoding a large file holds the interpreter lock
+        the request threads need. A busy tracker writes every interval.
+        """
         while True:
             with self._lock:
                 while not self._closed and not self._pending_locked():
@@ -853,14 +854,13 @@ class UsageTracker:
                 if self._closed or self._interval is None:
                     return
                 deadline = time.monotonic() + self._interval
-                while not self._closed and not self._due:
+                while not self._closed:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         break
                     self._wake.wait(remaining)
                 if self._closed:
                     return  # close() writes what is left
-                self._due = False
             try:
                 self.flush_if_dirty()
             except Exception:

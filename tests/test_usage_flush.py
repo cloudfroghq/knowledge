@@ -265,17 +265,34 @@ def test_a_background_tracker_writes_what_an_inline_one_writes(tmp_path: Path, s
 
 def test_the_recording_thread_never_writes_the_file(tmp_path: Path) -> None:
     path = tmp_path / "usage_stats.json"
-    tracker = UsageTracker(path, flush_interval_s=3600)
+    tracker = UsageTracker(path, flush_interval_s=0.05)
 
     with file_opens(tmp_path) as opens:
         for n in range(45):
             tracker.record_uses([PATHS[n % len(PATHS)]])
-        _wait_until(lambda: len(opens.writes("usage_stats.json.*.tmp")) >= 1)  # 20 hits wake the writer
+        _wait_until(lambda: len(opens.writes("usage_stats.json.*.tmp")) >= 1)
         recorder_writes = [t for t in opens.writes("*") if t != "usage-flush"]
 
     assert recorder_writes == []
     tracker.close()
     assert sum(e["uses"] for e in json.loads(path.read_text())["files"].values()) == 45
+
+
+def test_a_busy_background_tracker_never_writes_at_a_hit_count(tmp_path: Path) -> None:
+    """However many hits arrive, the writer waits out its interval: nothing is written before it, or close()."""
+    path = tmp_path / "usage_stats.json"
+    tracker = UsageTracker(path, flush_interval_s=3600)
+
+    with file_opens(tmp_path) as opens:
+        for n in range(500):
+            tracker.record_uses([PATHS[n % len(PATHS)]])
+            tracker.record_call("search", client="c", principal="stdio", error=False, latency_ms=1)
+        before_close = list(opens.events)
+        tracker.close()
+
+    assert before_close == []
+    assert opens.writes("usage_stats.json.*.tmp") == ["MainThread"]
+    assert sum(e["uses"] for e in json.loads(path.read_text())["files"].values()) == 500
 
 
 def test_a_few_hits_are_written_one_interval_later(tmp_path: Path) -> None:

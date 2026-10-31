@@ -54,9 +54,9 @@ from knowledge.vault_source import DirectoryVaultSource
 log = logging.getLogger(__name__)
 
 #: Seconds a runtime's usage tracker waits, after the first pending hit, before
-#: its background writer writes ``usage_stats.json`` (sooner at 20 hits). A
-#: hard crash loses at most this much of the counts; ``VaultRegistry.close``
-#: and interpreter exit write the rest.
+#: its background writer writes ``usage_stats.json``: at most one write per
+#: interval. A hard crash loses at most this much of the counts;
+#: ``VaultRegistry.close`` and interpreter exit write the rest.
 USAGE_FLUSH_INTERVAL_S = 2.0
 
 try:  # POSIX only; elsewhere two migrations of one directory are not serialized.

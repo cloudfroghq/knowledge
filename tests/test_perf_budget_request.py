@@ -22,6 +22,7 @@ import os
 import random
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
@@ -46,6 +47,15 @@ FIXTURE_VAULT = TESTS_DIR / "fixtures" / "vault"
 SERVER_SCRIPT = TESTS_DIR / "golden_stdio_server.py"
 USAGE_TMP = "usage_stats.json.*.tmp"
 GRAPH_TMP = "link_graph.json.*.tmp"
+
+
+def _wait_until(predicate: Any, *, seconds: float = 60.0) -> None:
+    """Synchronise with a background thread; the bound only keeps a broken one from hanging the suite."""
+    deadline = time.monotonic() + seconds
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("the background thread never got there")
+        time.sleep(0.02)
 
 
 def _compact(text: str) -> bool:
@@ -174,6 +184,7 @@ def test_tool_calls_never_write_the_usage_file_on_a_request_thread(tmp_path: Pat
         rt.indexer.index(force=False, target="vault")
         with file_opens(index) as opens:
             asyncio.run(calls())
+            _wait_until(lambda: "usage-flush" in opens.writes(USAGE_TMP))  # the 2 s timer fires
             during = list(opens.writes(USAGE_TMP))
             rt.usage.close()
         at_close = opens.writes(USAGE_TMP)[len(during) :]
