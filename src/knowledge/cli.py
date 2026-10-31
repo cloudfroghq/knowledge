@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import platform
+import re
 import runpy
 import shutil
 import sqlite3
@@ -58,7 +59,7 @@ from knowledge.errors import (
     KnowledgeToolError,
     MemoryWriteFailed,
 )
-from knowledge.vault_lint import LATEST_RULES, RULES_1_2, RULES_1_3, RULESETS, fix, lint
+from knowledge.vault_lint import DOCUMENT_TYPES, LATEST_RULES, RULES_1_2, RULES_1_3, RULESETS, fix, lint
 
 PROJECT_ROOT: Path = settings.PROJECT_ROOT
 
@@ -136,6 +137,13 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="check only what a machine that consumes a remote server owns: the vault, Contexts/config.json, "
         "repos.local.json and each checkout's package; skip the server checks",
+    )
+
+    doctor.add_argument(
+        "--shape",
+        action="store_true",
+        help="print the size distributions of the default vault's index (numbers only: no path, title, tag, "
+        "term or name) as JSON, to calibrate a synthetic vault; not combinable with --brief or --client",
     )
 
     init = sub.add_parser(
@@ -631,6 +639,130 @@ def _tool_calls_report(spec: settings.VaultSpec) -> dict[str, Any]:
     )
 
 
+#: ``doctor --shape`` output version; the consumer (``tests/synthetic_vault.py``) checks it.
+SHAPE_VERSION = 1
+
+#: The ``type`` values ``doctor --shape`` may name: the contract's closed set. Any other value a
+#: vault writes is vault content and is counted under ``other``, never named.
+SHAPE_OTHER_TYPE = "other"
+
+#: ``[[target]]`` as the indexer's wikilink reader sees it, counted and never captured.
+_WIKILINK = re.compile(r"\[\[[^\]\n]+\]\]")
+_SECTION_HEADING = re.compile(r"^## ", re.MULTILINE)
+
+#: Most recent persisted query events and distinct terms ``--shape`` looks at.
+_SHAPE_QUERIES = 500
+_SHAPE_TERMS = 1000
+
+
+def _percentile(sorted_values: Sequence[float], fraction: float) -> float:
+    """Linear interpolation between the two nearest ranks of an ascending, non-empty list."""
+    position = fraction * (len(sorted_values) - 1)
+    low = int(position)
+    high = min(low + 1, len(sorted_values) - 1)
+    return sorted_values[low] + (sorted_values[high] - sorted_values[low]) * (position - low)
+
+
+def _count_distribution(values: Sequence[int]) -> dict[str, int] | None:
+    """``p10``, ``p50``, ``p90``, ``p99`` and ``max`` of ``values``, as integers; ``None`` for no values."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    out = {f"p{q}": round(_percentile(ordered, q / 100)) for q in (10, 50, 90, 99)}
+    out["max"] = ordered[-1]
+    return out
+
+
+def _term_selectivity(conn: sqlite3.Connection, documents: int, usage_file: Path) -> dict[str, float] | None:
+    """Percentiles of the share of documents each term of the recent searches occurs in.
+
+    The persisted queries are read here and turned into numbers: no query, term
+    or document leaves this function, only ``p50``, ``p90`` and ``p99`` of
+    ``documents containing the term / documents``. A term no document contains
+    says nothing about selectivity and is left out. ``None`` without queries.
+    """
+    if documents <= 0:
+        return None
+    try:
+        events = json.loads(usage_file.read_text(encoding="utf-8")).get("query_opens", [])
+    except (OSError, ValueError, AttributeError):
+        return None
+    queries: dict[str, None] = {}
+    for event in events[-_SHAPE_QUERIES:] if isinstance(events, list) else []:
+        text = event.get("query") if isinstance(event, dict) else None
+        if isinstance(text, str):
+            queries[text] = None
+    terms = dict.fromkeys(phrase for text in queries for phrase in stores.query_phrases(text))
+    shares: list[float] = []
+    for phrase in list(terms)[:_SHAPE_TERMS]:
+        (matching,) = conn.execute(
+            "SELECT count(DISTINCT c.file_path) FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid "
+            "WHERE chunks_fts MATCH ?",
+            [stores.fts_match([phrase])],
+        ).fetchone()
+        if matching:
+            shares.append(matching / documents)
+    if not shares:
+        return None
+    ordered = sorted(shares)
+    return {f"p{q}": round(_percentile(ordered, q / 100), 4) for q in (50, 90, 99)}
+
+
+def _shape_report(spec: settings.VaultSpec) -> dict[str, Any]:
+    """Size distributions of vault ``spec``'s index, read-only, as numbers and nothing else.
+
+    Meant to calibrate a synthetic vault (``tests/synthetic_vault.py``), so the
+    output may be shared: it holds counts and percentiles, the document types
+    of the contract's closed set (anything else under ``other``) and no path,
+    title, tag, heading, term, vault name or text. The index is opened
+    read-only and ``immutable``: a plain read-only connection to a WAL database
+    creates its ``-shm`` and ``-wal`` files, and this command writes nothing.
+    The price is that frames a running server has not yet checkpointed are not
+    seen, which a distribution does not notice.
+    """
+    index = spec.index_dir / stores.INDEX_FILE
+    if not index.is_file():
+        raise KnowledgeConfigError(
+            E_INDEX_UNREADABLE, "the default vault has no index yet; the server builds it the first time it serves"
+        )
+    try:
+        conn = sqlite3.connect(f"file:{index}?mode=ro&immutable=1", uri=True, timeout=5.0)
+    except sqlite3.Error as exc:
+        raise KnowledgeConfigError(
+            E_INDEX_UNREADABLE, f"the index cannot be opened read-only: {type(exc).__name__}"
+        ) from exc
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        body_chars: list[int] = []
+        sections: list[int] = []
+        links: list[int] = []
+        type_counts: dict[str, int] = {}
+        for doc_type, body in conn.execute("SELECT type, body FROM docs"):
+            body_chars.append(len(body))
+            sections.append(len(_SECTION_HEADING.findall(body)))
+            links.append(len(_WIKILINK.findall(body)))
+            name = doc_type if doc_type in DOCUMENT_TYPES else SHAPE_OTHER_TYPE
+            type_counts[name] = type_counts.get(name, 0) + 1
+        chunks = [n for (n,) in conn.execute("SELECT count(*) FROM chunks GROUP BY file_path")]
+        from knowledge.registry import USAGE_FILE
+
+        df = _term_selectivity(conn, len(body_chars), spec.index_dir / USAGE_FILE)
+    except sqlite3.Error as exc:
+        raise KnowledgeConfigError(E_INDEX_UNREADABLE, f"the index cannot be read: {type(exc).__name__}") from exc
+    finally:
+        conn.close()
+    return {
+        "shape_version": SHAPE_VERSION,
+        "docs": len(body_chars),
+        "body_chars": _count_distribution(body_chars),
+        "chunks_per_doc": _count_distribution(chunks),
+        "sections_per_doc": _count_distribution(sections),
+        "links_per_doc": _count_distribution(links),
+        "type_counts": dict(sorted(type_counts.items())),
+        "query_term_df": df,
+    }
+
+
 def _contexts_report(spec: settings.VaultSpec, env: Mapping[str, str]) -> dict[str, Any] | None:
     """Whether this machine initialized vault ``spec``'s context packages; ``None`` when it declares none.
 
@@ -937,7 +1069,19 @@ def _brief_line(report: Mapping[str, Any]) -> str:
     return _brief(f"knowledge doctor: {found}; run: {report['doctor_command']}")
 
 
-def _doctor(vaults: str | None, brief: bool, client: bool = False) -> int:
+def _doctor_shape(vaults: str | None) -> int:
+    """``doctor --shape``: the default vault's size distributions as JSON; rc 2 when they cannot be read."""
+    env = _environment(None, vaults)
+    try:
+        loaded = settings.load_settings(env, project_root=PROJECT_ROOT)
+        report = _shape_report(loaded.default_vault())
+    except KnowledgeConfigError as exc:
+        return _fail(exc)
+    print(json.dumps(report, sort_keys=True, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _doctor(vaults: str | None, brief: bool, client: bool = False, shape: bool = False) -> int:
     """Report whether this installation can serve, without writing anything.
 
     Exit status 0 when every check passes, 1 when a check fails and 2 when the
@@ -946,8 +1090,15 @@ def _doctor(vaults: str | None, brief: bool, client: bool = False) -> int:
     warning, not a failed check: it leaves the exit status at 0. ``--client``
     checks only what a machine that consumes a remote server owns (the vault,
     its ``Contexts/config.json``, ``repos.local.json`` and each checkout's
-    package) and skips every server check.
+    package) and skips every server check. ``--shape`` prints the default
+    vault's size distributions instead of the report (see :func:`_shape_report`).
     """
+    if shape:
+        if brief or client:
+            return _fail(
+                KnowledgeConfigError(E_ARGUMENT_CONFLICT, "--shape cannot be combined with --brief or --client")
+            )
+        return _doctor_shape(vaults)
     env = _environment(None, vaults)
     try:
         loaded = settings.load_settings(env, project_root=PROJECT_ROOT)
@@ -1429,7 +1580,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command in (None, "serve"):
         return _serve(getattr(args, "transport", None), getattr(args, "vaults", None), getattr(args, "profile", None))
     if args.command == "doctor":
-        return _doctor(args.vaults, args.brief, args.client)
+        return _doctor(args.vaults, args.brief, args.client, args.shape)
     if args.command == "init":
         return _init(args)
     if args.command == "migrate-index":
