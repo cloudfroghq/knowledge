@@ -11,7 +11,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash(git push *)|Bash(bkt pr create *)",
+        "matcher": "Bash(git push *)",
         "hooks": [
           {
             "type": "command",
@@ -45,15 +45,6 @@
             "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/confirm-reindex-cost.sh"
           }
         ]
-      },
-      {
-        "matcher": "mcp__mcp-atlassian__jira_transition_issue",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-jira-transition.sh"
-          }
-        ]
       }
     ],
     "Stop": [
@@ -78,7 +69,6 @@
   "enabledMcpjsonServers": [
     "cloudfrog-knowledge",
     "memory",
-    "graphify",
-    "mcp-atlassian"
+    "graphify"
   ]
 }
