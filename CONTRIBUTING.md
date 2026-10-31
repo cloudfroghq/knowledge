@@ -48,10 +48,11 @@ Run these before you open a pull request. They are the same commands ring 1 runs
 | `uv run ruff check` | `All checks passed!` |
 | `uv run lint-imports` | `Contracts: 4 kept, 0 broken.` |
 | `(cd npm && npm test)` | `node --test` passes with 0 failures (a trailing `npm notice` about a newer npm is noise) |
-| `uv build` | builds the sdist and wheel of `cloudfrog-knowledge` (only `src/knowledge`) into `dist/`, which is gitignored; `--out-dir DIR` puts them elsewhere |
 | `uv run mypy src/knowledge` | optional: a development tool in the dev group, **not** a gate; no workflow runs it |
 
-Patch coverage is also a gate in CI (`diff-cover` against `origin/main`); its threshold lives in `pyproject.toml`, together with the overall coverage threshold, so the gate and your machine cannot disagree.
+Do not run `uv build` on your machine: the build runs on the CI runner (`release-check.yml` and `publish.yml` build the sdist and the wheel and check what they carry with `tests/test_sdist_contents.py`).
+
+Coverage is gated on the patch, not on the repository total. In CI, on pull requests, ring 1 runs `diff-cover` against `origin/main`, and the lines your change touches must reach 80 % (`fail_under = 80` under `[tool.diff_cover]` in `pyproject.toml`, so the gate and your machine cannot disagree). There is no floor on total coverage, on purpose: on a codebase with historical debt a global floor is either unreachable or met with tests that assert nothing (see the comment in `pyproject.toml`).
 
 ### Known environment caveats
 

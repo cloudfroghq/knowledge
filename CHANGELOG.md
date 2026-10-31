@@ -14,13 +14,13 @@ The MCP tool contract is versioned separately from the package. Every change to 
 | 1.4.0 | 0.5.0 |
 | 2.0.0 | 0.6.0 (unchanged in 0.7.0, 0.8.0 and 0.9.0) |
 
-Release dates come from the contract changelog and the release commit. Detail for 0.7.0 and 0.8.0 is thin: their dates are not recorded in this repository (only `v0.9.0` is tagged here, and the history starts at the initial public release).
+Release dates come from the contract changelog and the release commit. Detail for 0.7.0 and 0.8.0 is thin: their dates are not recorded in this repository (only `v0.9.0` is tagged here, and the history starts at the initial public release). Releases before 0.9.0 were not tagged in this repository, so their headings below are plain text and have no release page to link to.
 
 ## [Unreleased]
 
 ### Changed
 
-- Project documentation migrated to English (README, guides, runbooks and contributor files). Documentation only: no code, tool contract or package behavior changes.
+- Project documentation migrated to English (README, guides, runbooks and contributor files). Documentation only, plus the tool-inventory generator (`scripts/tool_inventory.py`), whose prose is now English, and the tests that assert on documentation headings; no tool contract, response or package behavior changes.
 
 ### Added
 
@@ -143,10 +143,3 @@ Tool contract 1.1.0 (additive). See [contract changelog 1.1.0](docs/contract/CHA
 
 [Unreleased]: https://github.com/cloudfroghq/knowledge/compare/v0.9.0...HEAD
 [0.9.0]: https://github.com/cloudfroghq/knowledge/releases/tag/v0.9.0
-[0.8.0]: https://github.com/cloudfroghq/knowledge/releases/tag/v0.8.0
-[0.7.0]: https://github.com/cloudfroghq/knowledge/releases/tag/v0.7.0
-[0.6.0]: https://github.com/cloudfroghq/knowledge/releases/tag/v0.6.0
-[0.5.0]: https://github.com/cloudfroghq/knowledge/releases/tag/v0.5.0
-[0.4.0]: https://github.com/cloudfroghq/knowledge/releases/tag/v0.4.0
-[0.3.0]: https://github.com/cloudfroghq/knowledge/releases/tag/v0.3.0
-[0.2.0]: https://github.com/cloudfroghq/knowledge/releases/tag/v0.2.0

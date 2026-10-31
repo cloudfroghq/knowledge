@@ -236,7 +236,7 @@ def _deprecation(tool: dict[str, Any]) -> str | None:
     if not meta.get("knowledge/deprecated"):
         return None
     removal = meta.get("knowledge/removal")
-    return f"Deprecated (`_meta.knowledge/deprecated`); removed in {removal}." if removal else "Deprecated."
+    return f"Deprecated (`_meta.knowledge/deprecated`); to be removed in {removal}." if removal else "Deprecated."
 
 
 def _output_mode(tools: list[dict[str, Any]]) -> str:

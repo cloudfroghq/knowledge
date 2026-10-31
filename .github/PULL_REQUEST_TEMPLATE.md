@@ -42,7 +42,6 @@
 - [ ] `uv run ruff check`
 - [ ] `uv run lint-imports`
 - [ ] `(cd npm && npm test)`
-- [ ] `uv build`
 
 ## Notes for reviewers
 

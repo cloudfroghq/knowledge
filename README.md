@@ -57,7 +57,7 @@ The source is available under the [PolyForm Shield License 1.0.0](#license). Tha
 
 ![Architecture of the knowledge MCP server](docs/architecture.png)
 
-The diagram is a generated image, because Bitbucket does not render Mermaid in Markdown. Its source is [`docs/architecture.mmd`](docs/architecture.mmd). If you change the diagram, edit that file and regenerate the PNG:
+The diagram is a generated image so that it also renders where Mermaid does not (PyPI, mirrors, offline viewers); GitHub itself renders Mermaid. Its source is [`docs/architecture.mmd`](docs/architecture.mmd). If you change the diagram, edit that file and regenerate the PNG:
 
 ```bash
 npx -y @mermaid-js/mermaid-cli -i docs/architecture.mmd -o docs/architecture.png -b white -s 2
@@ -139,7 +139,7 @@ Without `VAULT_PATH`, `KNOWLEDGE_VAULTS` or a user `vaults.yaml`, startup fails 
 
 ### Connect it to an MCP client
 
-**Claude Code, with the plugin (recommended).** The `cloudfroghq` marketplace publishes `knowledge@cloudfroghq` (stdio over your local vaults) and `knowledge-remote@cloudfroghq` (a deployed HTTP server). Install steps, prerequisites and the vault registry the plugin reads are in [`docs/install.md`](docs/install.md):
+**Claude Code, with the plugin (recommended).** The `cloudfroghq` marketplace publishes `knowledge@cloudfroghq` (stdio over your local vaults) and `knowledge-remote@cloudfroghq` (a deployed HTTP server). Install steps, prerequisites (including the minimum Claude Code version) and the vault registry the plugin reads are in [`docs/install.md`](docs/install.md):
 
 ```bash
 claude plugin marketplace add cloudfroghq/claude-plugins && claude plugin install knowledge@cloudfroghq --scope user
@@ -454,7 +454,7 @@ memory cloud enroll knowledge
 MEMORY_CLOUD_TOKEN=<token> memory sync --cloud --project knowledge
 ```
 
-The sync is bidirectional: it pushes your memories and pulls your teammates' (check `Pending import` in `memory sync --cloud --status --project knowledge`). Repeat it whenever you want to share or receive, or automate it with a weekly cron. Shared-memory conventions:
+The sync is bidirectional: it pushes your memories and pulls your teammates' (check `Pending import` in `memory sync --cloud --status --project knowledge`). Repeat it whenever you want to share or receive, or automate it with a weekly cron. Shared-memory conventions (see `docs/TEAM-USAGE.md` in the memory repository, not in this one):
 
 - `scope: project` is knowledge useful to the team (decisions, bugfixes, gotchas). `scope: personal` is **not** excluded from the sync: if something is truly personal, save it under another project name that is not enrolled.
 - Save project memories in one common language: memory search is lexical (FTS5) and does not cross languages.
@@ -705,7 +705,7 @@ The workflow has `permissions: contents: read`, reads no secret and pins each ac
 
 The weekly stale-documents report does not run here: each vault runs it in its own workflow, which fetches `scripts/weekly-stale-report.py` and `scripts/notify-stale-report.sh` from this repository, pinned by commit or tag. It is never a gate and never writes in the vault.
 
-`.github/workflows/release-check.yml` verifies a release: it runs on every pushed `v*` tag and by hand. It reads no secrets or environments, and its token is read-only. It checks, in this order: that `pyproject.toml`, `plugin.json`, the `@v<version>` of `.mcp.json`, `npm/package.json` and `uv.lock` agree (`scripts/check-version.sh`, which also compares the tag when the ref is a tag; from a branch there is no tag and it compares only the files); that each `tests/golden/v*/SHA256SUMS` holds and that `test_contract_frozen.py`, `test_contract_golden.py` and `test_plugin_manifest.py` pass with `sqlite-vec` loaded; that `claude plugin validate --strict plugin/claude-code` passes (Node 22 and an exact Claude Code version); and that the sdist and the wheel build and carry only the package (`tests/test_sdist_contents.py`). A dispatch uses the workflow of the ref you choose: `gh workflow run release-check.yml --ref main` works, a tag older than `release-check.yml` does not (it lacks the file). Whoever cuts the release waits for the tag run to go green before opening the marketplace pull request (`cloudfroghq/claude-plugins`).
+`.github/workflows/release-check.yml` verifies a release: it runs on every pushed `v*` tag and by hand. It reads no secrets or environments, and its token is read-only. It checks, in this order: that `pyproject.toml`, `plugin.json`, the `@v<version>` of `.mcp.json`, `npm/package.json` and `uv.lock` agree (`scripts/check-version.sh`, which also compares the tag when the ref is a tag; from a branch there is no tag and it compares only the files); that each `tests/golden/v*/SHA256SUMS` holds and that `test_contract_frozen.py`, `test_contract_golden.py` and `test_plugin_manifest.py` pass with `sqlite-vec` loaded; that `claude plugin validate --strict plugin/claude-code` passes (Node 22 and Claude Code `2.1.296`, pinned exactly); and that the sdist and the wheel build and carry only the package (`tests/test_sdist_contents.py`). The build runs on the runner; the prohibition of `uv build` is for the local machine. A dispatch uses the workflow of the ref you choose: `gh workflow run release-check.yml --ref main` works, a tag older than `release-check.yml` does not (it lacks the file). Whoever cuts the release waits for the tag run to go green before opening the marketplace pull request (`cloudfroghq/claude-plugins`).
 
 `.github/workflows/publish.yml` publishes each `v*` tag to PyPI (`cloudfrog-knowledge`) and npm (`@cloudfrog/knowledge`). A first job, with no permission beyond reading the repository, compares the tag with every version, checks the `uv` checksums the npm package carries against the `uv` release and installs it with the package's own code, runs `node --test` and `npm pack --dry-run` in `npm/`, builds the sdist and the wheel, installs the wheel in a clean Python 3.12 environment, and requires `cloudfrog-knowledge --version` and `knowledge --version` to print the version. Only then does the second job, with the `release` environment and `id-token: write`, publish by trusted publishing (OIDC, no secrets): PyPI with `uv publish --trusted-publishing always` and npm with `npm publish --provenance --access public`. Each registry is skipped, with a warning, only if that exact version already exists; any other answer fails it. By hand, `gh workflow run publish.yml --ref main` builds and verifies without publishing. Operating it, the first manual `npm publish` and the trusted-publisher setup are in [`docs/runbooks/ci-ring1.md`](docs/runbooks/ci-ring1.md), section 7.
 

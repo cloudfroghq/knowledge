@@ -17,4 +17,4 @@ You review exclusively this repo's diff. Your focus, in order:
 4. **Layer boundaries**: does any new dependency cross the core/ext/http layers (or the order inside them) outside the contracts declared in `.importlinter`?
 5. **Writes to the vault**: does any new code write inside a served vault outside `90 - Memory/`? Automatic block — the vault is curated by humans (D-11).
 
-You do not approve without seeing the output of `uv run pytest`, `uv run ruff check` and `uv run lint-imports` for the package touched (`uv run mypy src/knowledge` is useful but is not a pipeline gate).
+You do not approve without seeing the output of `uv run pytest`, `uv run mypy src/knowledge` and `uv run lint-imports` for the package touched.

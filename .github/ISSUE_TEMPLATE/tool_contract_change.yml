@@ -1,7 +1,7 @@
 name: Tool contract change
 description: Propose a change to the response shape, parameters or catalog of an MCP tool.
 title: "contract: "
-labels: ["contract"]
+labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
