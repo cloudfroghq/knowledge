@@ -264,7 +264,7 @@ def test_example_manifest_parses() -> None:
 
 
 def test_runbook_names_every_error_code() -> None:
-    runbook = (ROOT / "docs" / "runbooks" / "servir-varios-vaults.md").read_text()
+    runbook = (ROOT / "docs" / "runbooks" / "serve-multiple-vaults.md").read_text()
     codes = {v for k, v in vars(errors).items() if k.startswith("E_") and isinstance(v, str)}
     codes.add("E_DEPLOY_KEY_MISSING")
     missing = sorted(c for c in codes if c not in runbook)
@@ -272,7 +272,7 @@ def test_runbook_names_every_error_code() -> None:
 
 
 def test_runbook_documents_the_generic_compose_and_its_entrypoint_codes() -> None:
-    runbook = (ROOT / "docs" / "runbooks" / "servir-varios-vaults.md").read_text()
+    runbook = (ROOT / "docs" / "runbooks" / "serve-multiple-vaults.md").read_text()
     for name in (
         "infra/compose.yml",
         "KNOWLEDGE_VAULTS_YAML",
