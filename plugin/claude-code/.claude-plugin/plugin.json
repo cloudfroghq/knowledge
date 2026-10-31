@@ -2,7 +2,7 @@
   "name": "knowledge",
   "displayName": "Knowledge (stdio)",
   "version": "0.9.0",
-  "description": "Servidor MCP de conocimiento curado sobre tus vaults locales, lanzado con uvx",
+  "description": "MCP server for curated knowledge over your local vaults, launched with uvx",
   "author": {
     "name": "CloudFrog",
     "email": "admin@cloudfrog.com.mx"
@@ -13,13 +13,13 @@
   "userConfig": {
     "vaults_config": {
       "type": "file",
-      "title": "Registro de vaults",
-      "description": "vaults.yaml a servir. Vacío: ~/.config/knowledge/vaults.yaml"
+      "title": "Vault registry",
+      "description": "vaults.yaml to serve. Empty: ~/.config/knowledge/vaults.yaml"
     },
     "embeddings_provider": {
       "type": "string",
-      "title": "Proveedor de embeddings",
-      "description": "openai, none o bag-of-words. Vacío: lo que declare vaults.yaml (por omisión openai)"
+      "title": "Embeddings provider",
+      "description": "openai, none or bag-of-words. Empty: whatever vaults.yaml declares (openai by default)"
     }
   }
 }

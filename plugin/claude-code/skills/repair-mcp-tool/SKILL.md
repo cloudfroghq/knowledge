@@ -1,35 +1,35 @@
 ---
 name: repair-mcp-tool
-description: Arregla una tool MCP rota del servidor knowledge sin romper las que funcionan.
-when_to_use: cuando una tool del servidor knowledge está documentada como rota y tiene (o necesita) un test de regresión en rojo con la entrada exacta que falla.
+description: Fixes a broken MCP tool of the knowledge server without breaking the ones that work.
+when_to_use: when a tool of the knowledge server is documented as broken and has (or needs) a failing regression test with the exact input that fails.
 allowed-tools: Read, Write, Edit, Bash(uv run *), Bash(graphify *), mcp__plugin_knowledge_knowledge__get_document, mcp__plugin_memory_memory__mem_save
 model: sonnet
 effort: high
 disable-model-invocation: false
 user-invocable: true
-argument-hint: <nombre-de-la-tool>
+argument-hint: <tool-name>
 ---
 
 # repair-mcp-tool
 
-Arregla la tool $1 sin romper el resto del contrato. Se trabaja en un checkout del repositorio del servidor.
+Fix the tool $1 without breaking the rest of the contract. Work in a checkout of the server repository.
 
-## Pasos
+## Steps
 
-1. Reproducir el fallo con los parámetros exactos documentados y guardar la salida literal del error.
-2. Escribir el test de `pytest` que reproduce ese fallo, contra el vault de prueba del repositorio (nunca contra un vault real), y verlo en rojo.
-3. `graphify explain "<función>"` sobre el símbolo implicado, para el mapa de llamadas dentro del repo.
-4. Corregir respetando el contrato de capas (`uv run lint-imports`).
-5. Correr la suite completa (`uv run pytest`) y `uv run ruff check`.
-6. Verificar que la forma de la respuesta no cambió: `file_path` sin prefijo y el golden master del contrato en verde. Si la forma tiene que cambiar, es un cambio de contrato: se declara en el historial del contrato y en un ADR, nunca en silencio.
-7. Abrir el pull request con la herramienta de VCS del remoto del repositorio, adjuntando la salida antes y después.
-8. Actualizar el inventario de tools del vault y el `CLAUDE.md` del repositorio si la tool pasa de "rota" a "disponible".
+1. Reproduce the failure with the exact documented parameters and save the literal error output.
+2. Write the `pytest` test that reproduces that failure, against the repository's test vault (never against a real vault), and see it fail.
+3. `graphify explain "<function>"` on the symbol involved, to get the call map inside the repo.
+4. Fix it while respecting the layer contract (`uv run lint-imports`).
+5. Run the full suite (`uv run pytest`) and `uv run ruff check`.
+6. Verify that the response shape did not change: `file_path` without a prefix and the contract golden master green. If the shape has to change, it is a contract change: declare it in the contract history and in an ADR, never silently.
+7. Open the pull request with the VCS tool of the repository's remote, attaching the before and after output.
+8. Update the vault's tool inventory and the repository's `CLAUDE.md` if the tool goes from "broken" to "available".
 9. `mem_save` (`type: bugfix`, `topic_key: knowledge-mcp/tools/$1`).
 
-## Antes del pull request
+## Before the pull request
 
-- [ ] Fallo reproducido con los parámetros exactos documentados; salida literal guardada.
-- [ ] Test de regresión visto en rojo antes del arreglo y en verde después.
-- [ ] `lint-imports` sin violaciones nuevas.
-- [ ] Suite completa y golden master del contrato en verde.
-- [ ] Salida antes y después adjunta al pull request.
+- [ ] Failure reproduced with the exact documented parameters; literal output saved.
+- [ ] Regression test seen failing before the fix and passing after it.
+- [ ] `lint-imports` with no new violations.
+- [ ] Full suite and contract golden master green.
+- [ ] Before and after output attached to the pull request.
