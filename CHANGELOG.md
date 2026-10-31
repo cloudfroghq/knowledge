@@ -46,6 +46,10 @@ Contract unchanged at 2.0.0: every tool response is byte-identical (the frozen g
 - A store error inside an embedding batch now rolls back the whole batch, where before the earlier documents of the batch stayed written. The reindex fails with the same error either way and reports no file; the next reindex writes the documents the failed run did not.
 - Usage counts: a process killed hard can lose up to about 2 seconds of counts (before, up to 19 events). `link_graph.json` is written as compact JSON (still read in either form).
 
+### Fixed
+
+- `get_document(section=...)` no longer cuts a section short when it contains a fenced code block with a line that starts with `#` (a shell comment, for example), and the heading list of `E_SECTION_NOT_FOUND` no longer includes such lines. Section selection now uses the same headings as every `chunk_id` (`pointers.headings`), which skips fenced code. A section that used to end at a comment inside a fence now returns up to the next real heading. Response shape unchanged.
+
 ## [0.9.0] - 2026-10-30
 
 Contract unchanged at 2.0.0. First release on PyPI and npm. See [contract changelog, package 0.9.0](docs/contract/CHANGELOG.md).

@@ -189,3 +189,119 @@ def test_content_under_the_limit_is_not_flagged_as_truncated(indexed_server) -> 
 
     assert "truncated" not in result
     assert "next_offset" not in result
+
+
+# ---------------------------------------------------------------------------
+# Sections and fenced code: a ``#`` line inside a fence is code, not a heading
+# ---------------------------------------------------------------------------
+
+FENCED_BODY = "# Doc\n\n## Run\n\n```bash\ncmd a\n# alt:\ncmd b\n```\n\n## Next\n\ntext\n"
+FENCED_RUN = "## Run\n\n```bash\ncmd a\n# alt:\ncmd b\n```"
+
+
+def test_a_comment_inside_a_fence_is_not_a_heading() -> None:
+    from knowledge import pointers
+    from knowledge.server import _extract_section, _list_headers
+
+    assert _list_headers(FENCED_BODY) == ["Doc", "Run", "Next"]
+    assert _extract_section(FENCED_BODY, "Run") == FENCED_RUN
+    assert _extract_section(FENCED_BODY, "alt:") is None
+    # The section boundary is the one every ``chunk_id`` uses.
+    assert _list_headers(FENCED_BODY) == [head.text for head in pointers.headings(FENCED_BODY)]
+
+
+@pytest.mark.parametrize(
+    ("opening", "closing"),
+    [
+        ("```", "```"),
+        ("~~~", "~~~"),
+        ("```bash", "```"),
+        ("~~~sh", "~~~"),
+        (" ```", " ```"),
+        ("   ```", "```"),
+        ("````", "````"),
+        ("```", "`````"),
+    ],
+)
+def test_every_fence_form_keeps_its_comments_in_the_section(opening: str, closing: str) -> None:
+    from knowledge.server import _extract_section, _list_headers
+
+    body = f"# Doc\n\n## Run\n\n{opening}\ncmd a\n# alt:\n## also code\ncmd b\n{closing}\n\n## Next\n\ntext\n"
+
+    assert _list_headers(body) == ["Doc", "Run", "Next"]
+    assert _extract_section(body, "Run") == (
+        f"## Run\n\n{opening}\ncmd a\n# alt:\n## also code\ncmd b\n{closing}"
+    )
+    assert _extract_section(body, "Next") == "## Next\n\ntext"
+
+
+def test_a_longer_opening_fence_survives_a_shorter_fence_line_inside() -> None:
+    from knowledge.server import _extract_section, _list_headers
+
+    body = "# Doc\n\n## Run\n\n````md\n```\n# not a heading\n```\n````\n\n## Next\n\ntext\n"
+
+    assert _list_headers(body) == ["Doc", "Run", "Next"]
+    assert _extract_section(body, "Run") == "## Run\n\n````md\n```\n# not a heading\n```\n````"
+
+
+def test_an_unclosed_fence_runs_to_the_end_of_the_body() -> None:
+    from knowledge import pointers
+    from knowledge.server import _extract_section, _list_headers
+
+    body = "# Doc\n\n## Run\n\n```bash\ncmd a\n# alt:\n\n## Next\n\ntext\n"
+
+    assert _list_headers(body) == ["Doc", "Run"]
+    assert _list_headers(body) == [head.text for head in pointers.headings(body)]
+    assert _extract_section(body, "Run") == "## Run\n\n```bash\ncmd a\n# alt:\n\n## Next\n\ntext"
+    assert _extract_section(body, "Next") is None
+
+
+def test_headings_after_a_fence_are_still_found_with_their_levels() -> None:
+    from knowledge.server import _extract_section, _list_headers
+
+    body = (
+        "# Doc\n\n## Run\n\n```\n# one\n```\n\n### Detail\n\nmore\n\n"
+        "~~~\n# two\n~~~\n\n## Next\n\ntext\n"
+    )
+
+    assert _list_headers(body) == ["Doc", "Run", "Detail", "Next"]
+    # A deeper heading stays inside its parent section; the fences do not end it.
+    assert _extract_section(body, "Run") == (
+        "## Run\n\n```\n# one\n```\n\n### Detail\n\nmore\n\n~~~\n# two\n~~~"
+    )
+    assert _extract_section(body, "Detail") == "### Detail\n\nmore\n\n~~~\n# two\n~~~"
+
+
+def test_get_document_section_keeps_a_fenced_comment_inside_the_section(server_on_temp_vault) -> None:
+    from knowledge import config
+
+    path = "Runbooks/Runbook - Fenced Comment.md"
+    (config.VAULT_PATH / path).write_text(
+        "---\ntype: runbook\nstatus: active\n---\n# Fenced Comment\n\n## Run\n\n"
+        "```bash\ncmd a\n# alt:\ncmd b\n```\n\nafter the fence\n\n## Next\n\ntext\n",
+        encoding="utf-8",
+    )
+    server_on_temp_vault.default_runtime().indexer.index(force=False, target="vault")
+
+    result = asyncio.run(server_on_temp_vault.get_document(path, section="Run"))
+
+    assert result["content"] == "## Run\n\n```bash\ncmd a\n# alt:\ncmd b\n```\n\nafter the fence"
+
+    with pytest.raises(KnowledgeToolError) as excinfo:
+        asyncio.run(server_on_temp_vault.get_document(path, section="No Such Section"))
+
+    assert excinfo.value.code == errors.E_SECTION_NOT_FOUND
+    assert "['Fenced Comment', 'Run', 'Next']" in str(excinfo.value)
+    assert "alt:" not in str(excinfo.value)
+
+
+def test_fuzzy_and_numbered_matching_is_unchanged_and_still_skips_fences() -> None:
+    from knowledge.server import _extract_section
+
+    body = "# Doc\n\n## 1. Rollback steps\n\n```sh\n# undo\nrun\n```\n\n## Other\n\ntext\n"
+
+    # Exact beats fuzzy; with no exact match the first substring hit wins.
+    assert _extract_section(body, "rollback steps") == "## 1. Rollback steps\n\n```sh\n# undo\nrun\n```"
+    assert _extract_section(body, "rollback") == "## 1. Rollback steps\n\n```sh\n# undo\nrun\n```"
+    assert _extract_section(body, "undo") is None
+    assert _extract_section(body, "") is None
