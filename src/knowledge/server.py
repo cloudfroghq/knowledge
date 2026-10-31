@@ -1471,37 +1471,15 @@ def _memory_filter(rt: VaultRuntime, include_memories: bool) -> ChunkFilter | No
 
 
 def _documents(rt: VaultRuntime, file_paths: set[str]) -> dict[str, DocRecord]:
-    """The stored document of each path in ``file_paths``, without its body (see :func:`_documents_without_body`)."""
+    """The stored document of each path in ``file_paths``, without its body.
+
+    Callers read titles, frontmatter fields and ``metadata()`` only, never
+    ``DocRecord.body``, so the store leaves the bodies out.
+    """
     if not file_paths:
         return {}
-    found = _documents_without_body(rt.indexer.store, ChunkFilter(file_paths=tuple(sorted(file_paths))))
+    found = rt.indexer.store.documents(ChunkFilter(file_paths=tuple(sorted(file_paths))), with_body=False)
     return {doc.file_path: doc for doc in found}
-
-
-# Whether a store's ``documents`` accepts ``with_body``, by the function behind it.
-_TAKES_WITH_BODY: dict[Any, bool] = {}
-
-
-def _documents_without_body(store: Any, flt: ChunkFilter | None) -> list[DocRecord]:
-    """``store.documents(flt)``, asking the store to leave every ``body`` out when it can.
-
-    Only for callers that never read ``DocRecord.body``: titles, frontmatter
-    fields and ``metadata()``, which excludes the body. A store whose
-    ``documents`` takes no ``with_body`` keyword answers with the bodies, as
-    before; every other field is the same either way.
-    """
-    documents = store.documents
-    key = getattr(documents, "__func__", documents)
-    takes = _TAKES_WITH_BODY.get(key)
-    if takes is None:
-        try:
-            params = inspect.signature(documents).parameters.values()
-        except (TypeError, ValueError):
-            params = ()
-        # Named only: a ``**kwargs`` delegate may forward it to a store that refuses it.
-        takes = any(p.name == "with_body" and p.kind is not inspect.Parameter.VAR_KEYWORD for p in params)
-        _TAKES_WITH_BODY[key] = takes
-    return documents(flt, with_body=False) if takes else documents(flt)
 
 
 def _lexical(rt: VaultRuntime, query: str, k: int, flt: ChunkFilter | None) -> list[tuple[str, float, str, int]]:
@@ -1759,7 +1737,7 @@ def search_by_metadata(
     rt = _ensure_indexed()
     equals = {key: value for key, value in (("type", type), ("service", service), ("status", status)) if value}
     out: list[dict[str, Any]] = []
-    for doc in _documents_without_body(rt.indexer.store, ChunkFilter(equals=equals, tag=tag or None)):
+    for doc in rt.indexer.store.documents(ChunkFilter(equals=equals, tag=tag or None), with_body=False):
         fp = doc.file_path
         entry: dict[str, Any] = {"file_path": fp}
 
@@ -2192,11 +2170,11 @@ def get_stale_docs(
     _limit_arg("limit", limit, 1, STALE_LIMIT_MAX)
     rt = _ensure_indexed()
     store = rt.indexer.store
-    docs = _documents_without_body(store, ChunkFilter(equals={"type": type}) if type else None)
+    docs = store.documents(ChunkFilter(equals={"type": type}) if type else None, with_body=False)
 
     # Service hubs are fetched separately: a `type` filter above would hide
     # them, and they are the only documents that declare `owner`.
-    hubs = _documents_without_body(store, ChunkFilter(equals={"type": review.SERVICE_HUB_TYPE}))
+    hubs = store.documents(ChunkFilter(equals={"type": review.SERVICE_HUB_TYPE}), with_body=False)
     service_owners = review.build_service_owner_map(doc.metadata() for doc in hubs)
 
     excluded = vault_lint.index_exclude_matcher(rt.spec.index_exclude)
