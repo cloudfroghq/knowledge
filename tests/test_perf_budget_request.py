@@ -4,7 +4,9 @@ What a tool call may do besides answering, counted with ``tests/perf_counters.py
 
 * the usage file: one read per write, no write on a request thread, no rescan
   of every used file in ``boost`` (1.5);
-* the server shuts down with every count written.
+* the link graph: learned weights saved on the graph-save worker, at most one
+  save per ten changes, coalesced per runtime, as compact JSON (1.6);
+* the server shuts down with every count and weight written.
 
 Every vault here is generated in ``tmp_path`` or copied from the fixture, with
 the ``bag-of-words`` provider and no network. Nothing is patched.
@@ -14,9 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import random
 import sys
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
@@ -31,6 +35,7 @@ from perf_counters import count_calls, file_opens
 from synthetic_vault import Manifest, generate, queries
 
 from knowledge import registry, server, settings, usage
+from knowledge.graph import LinkGraph
 from knowledge.registry import VaultRuntime
 from knowledge.usage import UsageTracker
 
@@ -38,6 +43,31 @@ TESTS_DIR = Path(__file__).resolve().parent
 FIXTURE_VAULT = TESTS_DIR / "fixtures" / "vault"
 SERVER_SCRIPT = TESTS_DIR / "golden_stdio_server.py"
 USAGE_TMP = "usage_stats.json.*.tmp"
+GRAPH_TMP = "link_graph.json.*.tmp"
+
+
+def _compact(text: str) -> bool:
+    """``text`` is JSON written with no whitespace between tokens."""
+    return "\n" not in text and text == json.dumps(json.loads(text), ensure_ascii=False, separators=(",", ":"))
+
+
+@contextmanager
+def _graph_worker_held() -> Iterator[None]:
+    """Keep the graph-save worker busy until the block ends, so saves queue up behind it."""
+    release = threading.Event()
+    started = threading.Event()
+
+    def hold() -> None:
+        started.set()
+        release.wait(timeout=60)
+
+    held = server._GRAPH_SAVES.submit(hold)
+    assert started.wait(timeout=60)
+    try:
+        yield
+    finally:
+        release.set()
+        held.result(timeout=60)
 
 
 def _seed_usage(path: Path, *, files: int = 300, pairs: int = 2000, seed: int = 3) -> None:
@@ -166,6 +196,84 @@ def test_the_registry_builds_trackers_with_a_background_writer_and_closes_them(t
 
 
 # ---------------------------------------------------------------------------
+# 1.6 link graph: saved off the request thread, coalesced, compact
+# ---------------------------------------------------------------------------
+
+
+def test_learned_weights_are_saved_on_the_graph_save_worker(tmp_path: Path) -> None:
+    with _served(tmp_path, docs=80) as (rt, manifest):
+        index = rt.spec.index_dir
+        rt.indexer.index(force=False, target="vault")
+        qs = queries(manifest, seed=2, n=4)
+
+        async def searches() -> None:
+            for n in range(200):
+                await server.search(query=qs[n % len(qs)], limit=10)
+
+        with file_opens(index) as opens, count_calls(LinkGraph.save, LinkGraph.reinforce) as calls:
+            asyncio.run(searches())
+            server.drain_graph_saves(timeout=60)
+
+        writers = opens.writes(GRAPH_TMP)
+        assert writers and all(name.startswith("graph-save") for name in writers)
+        assert calls.threads("save") <= set(writers)
+        saves, reinforced = calls.count("save"), calls.count("reinforce")
+        assert 1 <= saves <= math.ceil(reinforced / server._HEBBIAN_SAVE_EVERY)
+        text = (index / "link_graph.json").read_text()
+        assert _compact(text) and "\n " not in text
+        assert json.loads(text)["weights"]
+
+
+def test_queued_saves_of_one_runtime_coalesce_into_one(tmp_path: Path) -> None:
+    with _served(tmp_path) as (rt, _manifest):
+        rt.indexer.index(force=False, target="vault")
+        with count_calls(LinkGraph.save) as saves:
+            with _graph_worker_held():
+                for _ in range(5):
+                    server._queue_graph_save(rt)
+            server.drain_graph_saves(timeout=60)
+            assert saves.count() == 1
+            server._queue_graph_save(rt)  # the earlier save has run: this one is queued again
+            server.drain_graph_saves(timeout=60)
+        assert saves.count() == 2
+        assert saves.threads() == {"graph-save_0"}
+
+
+def test_a_save_queued_before_a_reindex_never_writes_the_old_graph_last(tmp_path: Path) -> None:
+    with _served(tmp_path) as (rt, _manifest):
+        rt.indexer.index(force=False, target="vault")
+        graph_file = rt.spec.index_dir / "link_graph.json"
+        old = rt.indexer.graph
+        with _graph_worker_held():
+            server._queue_graph_save(rt)
+            (tmp_path / "vault" / "Linked Later.md").write_text(
+                "---\ntitle: Linked Later\ntype: note\n---\n# Linked Later\n\nSee [[" + Path(_manifest.paths[0]).stem + "]].\n"
+            )
+            rt.indexer.index(force=False, target="vault")  # swaps in a new graph and saves it
+        server.drain_graph_saves(timeout=60)
+
+        assert rt.indexer.graph is not old
+        on_disk = LinkGraph.load(graph_file)
+        assert on_disk._outgoing == rt.indexer.graph._outgoing
+        assert "Linked Later.md" in on_disk._outgoing
+        assert _compact(graph_file.read_text())
+
+
+def test_the_hebbian_save_cadence_is_unchanged(tmp_path: Path) -> None:
+    """Ten changes queue one save; nine wait for the next search that changes a weight."""
+    assert server._HEBBIAN_SAVE_EVERY == 10
+    with _served(tmp_path, docs=80) as (rt, manifest):
+        rt.indexer.index(force=False, target="vault")
+        qs = queries(manifest, seed=2, n=4)
+        with count_calls(server._queue_graph_save, LinkGraph.reinforce) as calls:
+            for n in range(60):
+                asyncio.run(server.search(query=qs[n % len(qs)], limit=10))
+        server.drain_graph_saves(timeout=60)
+        assert calls.count("_queue_graph_save") <= math.ceil(calls.count("reinforce") / 10)
+        assert rt.hebbian_dirty["count"] < server._HEBBIAN_SAVE_EVERY
+
+
+# ---------------------------------------------------------------------------
 # Shutdown: a real stdio server writes every count on its way out
 # ---------------------------------------------------------------------------
 
@@ -217,4 +325,19 @@ def test_a_stdio_server_writes_its_pending_usage_when_it_exits(tmp_path: Path) -
         for tool, clients in tools.items():
             calls[tool] = calls.get(tool, 0) + clients["shutdown-probe"][usage.STDIO_PRINCIPAL]["calls"]
     assert calls == {"search": 1, "list_vaults": 1}
+    assert not list(index.glob("*.tmp"))
+
+
+def test_a_stdio_server_leaves_its_learned_weights_on_disk_when_it_exits(tmp_path: Path) -> None:
+    index = tmp_path / "index"
+    search = ("search", {"query": "middleware outage login session", "limit": 10})
+    results = asyncio.run(_stdio_calls(index, [search] * 15))
+
+    assert not any(r.isError for r in results)
+    text = (index / "link_graph.json").read_text()
+    assert _compact(text)
+    assert json.loads(text)["weights"], "fifteen identical searches over linked documents learn some weight"
+    days = json.loads((index / "usage_stats.json").read_text())["tool_calls"]["days"]
+    counted = sum(tools["search"]["shutdown-probe"][usage.STDIO_PRINCIPAL]["calls"] for tools in days.values())
+    assert counted == 15
     assert not list(index.glob("*.tmp"))

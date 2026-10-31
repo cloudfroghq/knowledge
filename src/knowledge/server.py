@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar, Token
@@ -1028,13 +1029,61 @@ def _shape_rows(
 
 _HEBBIAN_SAVE_EVERY = 10
 
+# One worker, so the saves of a process never race each other; a save writes
+# the runtime's graph as it is when the save starts, never the one it had when
+# it was queued.
+_GRAPH_SAVES = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="graph-save")
+# ``id`` of every runtime with a save queued and not started: at most one waits per runtime.
+_graph_saves_queued: set[int] = set()
+_graph_saves_lock = threading.Lock()
+
+
+def _queue_graph_save(rt: VaultRuntime) -> None:
+    """Save ``rt``'s learned weights on the graph-save worker; a save already waiting covers this one."""
+    key = id(rt)
+    with _graph_saves_lock:
+        if key in _graph_saves_queued:
+            return
+        _graph_saves_queued.add(key)
+    try:
+        _GRAPH_SAVES.submit(_save_graph, rt, key)
+    except RuntimeError:  # the interpreter is shutting down: save here, as before
+        with _graph_saves_lock:
+            _graph_saves_queued.discard(key)
+        _save_graph(rt, key)
+
+
+def _save_graph(rt: VaultRuntime, key: int) -> None:
+    """Write ``rt``'s current graph; written again when a reindex swapped in a new one meanwhile.
+
+    A reindex swaps its graph in and then saves it itself. Re-reading the
+    graph after the write means an older graph's file never lands after the
+    newer one: either this save saw the swap and writes the new graph again,
+    or the swap comes later and the reindex's own save is the last write.
+    """
+    with _graph_saves_lock:
+        _graph_saves_queued.discard(key)
+    try:
+        before = rt.indexer.graph
+        rt.indexer.save_graph()
+        if rt.indexer.graph is not before:
+            rt.indexer.save_graph()
+    except Exception:
+        log.exception("graph save failed — results unaffected")
+
+
+def drain_graph_saves(timeout: float | None = None) -> None:
+    """Wait until every graph save queued so far is written; ``TimeoutError`` after ``timeout`` seconds."""
+    _GRAPH_SAVES.submit(lambda: None).result(timeout=timeout)
+
 
 def _track_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Record retrieval usage and reinforce co-retrieved linked pairs.
 
     Usage feeds the bounded ranking boost; co-retrieval within the 30-day
     window strengthens existing graph edges (Hebbian: docs consulted
-    together wire together). Graph saves are debounced.
+    together wire together). Graph saves are debounced and run on the
+    graph-save worker, never on the request thread.
     """
     fps = [r["file_path"] for r in results if r.get("file_path")]
     if not fps:
@@ -1053,7 +1102,7 @@ def _track_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if changed:
             rt.hebbian_dirty["count"] += changed
             if rt.hebbian_dirty["count"] >= _HEBBIAN_SAVE_EVERY:
-                rt.indexer.save_graph()
+                _queue_graph_save(rt)
                 rt.hebbian_dirty["count"] = 0
     except Exception:
         log.exception("usage tracking failed — results unaffected")
@@ -2871,6 +2920,10 @@ def serve(s: _settings.Settings) -> None:
             drain_tool_call_counts(timeout=10)
         except concurrent.futures.TimeoutError:
             log.warning("tool-call counts still waiting on the usage file lock — closing without them")
+        try:
+            drain_graph_saves(timeout=10)
+        except concurrent.futures.TimeoutError:
+            log.warning("a link graph save is still running — closing without waiting for it")
         registry().close()
 
 
