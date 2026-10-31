@@ -9,26 +9,39 @@ so the numbers are the same on a laptop and on the Linux pipeline, and a regress
 fails the suite without any wall-clock flake. Wall-clock claims belong to
 ``benchmarks/`` (``docs/performance/benchmarks.md``).
 
-How to read a budget. The limit is the measured value on 2026-10-31 (commit ``f163991``),
-not a goal. Counts that are structural (files opened, YAML parsed, commits) are exact.
+How to read a budget. The limit is a measured value, not a goal: first measured on
+2026-10-31 (commit ``f163991``), then lowered to the counts measured after phase 1 merged
+(items 1.2, 1.3, 1.4, 1.5 / 0.3 and 1.7a / 1.7b). Counts that are structural (files opened,
+YAML parsed, commits) are exact.
 Statement counts allow ``max(2, 10 %)`` and fetched-row counts 20 % of room, so an
 unrelated, legitimate change does not trip them while an N+1 per result still does. A
 faster implementation passes these tests untouched; a slower one fails them.
 
-Budgets expected to TIGHTEN (the owner of each item lowers its limit in the same change,
-and the integrator re-checks the rest after the streams merge). Each carries a
-``# TIGHTEN`` comment at its limit:
+Lowered after phase 1 (the limits below are the new counts):
 
-* index, 1.3 / 1.4 (store-index): no-op reindex parses 0 YAML documents and opens each
-  Markdown file once; one transaction per embedding batch instead of per document; no
-  ``DELETE FROM chunks_vec`` for a document that is new.
+* index, 1.3: one transaction per embedding batch instead of per document, and no
+  ``DELETE FROM chunks_vec`` for a document that is new; a changed document deletes its
+  vectors by id, one statement per stored chunk, instead of one scan of the vec0 table.
+* ``search`` family and listings, 1.7a / 1.7b (``with_body``): no ``docs.body`` column is
+  selected or fetched to build a result or listing row.
+* usage, 1.5: a flush reads the file once (the spend and the call days come from one parse);
+  that the registry's trackers flush off the request thread is fenced in
+  ``tests/test_perf_budget_request.py``.
+* start-up, 1.2: ``--version`` and ``doctor --brief`` import neither ``knowledge.server``
+  nor what only it pulls in.
+
+Budgets still expected to TIGHTEN carry a ``# TIGHTEN (<item>)`` comment at their limit:
+
 * lexical and ``search`` family, 2.1 (two-phase keyword path): the lexical statement hands
-  back text for at most ``k`` chunks, not for every match.
-* ``search``, 1.7a / 1.7b (``with_body``): no ``docs.body`` column is fetched to build a
-  result row.
-* usage, 1.5 / 0.3 (request-path): a flush reads the file once, and never on a request thread.
-* start-up, 1.2 (cli-launcher): ``--version`` and ``doctor --brief`` no longer import
-  ``knowledge.server``.
+  back text for at most ``k`` chunks, not for every match;
+* reindex, 2.2 (cheaper incremental reindex): an unchanged file is opened once and its YAML
+  is not parsed again;
+* ``search_deep``, 2.3: the hop pass re-ranks fewer rows.
+
+Item 1.4 (idf from a vocabulary of runs) changes no count fenced here: its work is
+in-memory and is fenced in ``tests/test_perf_budget_store.py``. The Markdown opens of
+``search``, ``context_pack`` and ``get_document`` (two per file: hash, then frontmatter)
+have no roadmap item yet; they are marked ``# no item yet``.
 
 Only fixtures and generated vaults in ``tmp_path`` are used, nothing is patched, and the
 registry the tools serve is installed with ``server.set_registry`` (and put back).
@@ -153,12 +166,12 @@ def index_lifecycle(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[s
 def test_first_index_work_per_document(index_lifecycle: dict[str, Work]) -> None:
     work = index_lifecycle["first"]
 
-    assert len(work.sql.statements) <= statements(1039)
-    assert work.sql.writes <= 735
-    # TIGHTEN (1.4): one transaction per embedding batch, so about DOCS / 32 commits, not one per document.
-    assert work.sql.commits <= DOCS
-    # TIGHTEN (1.3): a new document has no vectors to delete; the DELETE scans the whole vec0 table.
-    assert work.sql.count(r"^DELETE FROM chunks_vec") <= DOCS - 1
+    assert len(work.sql.statements) <= statements(929)
+    assert work.sql.writes <= 676
+    # 1.3: one transaction per embedding batch (142 chunks in batches of 32 or more), not one per document.
+    assert work.sql.commits <= 5
+    # 1.3: a new document has no vectors to delete, so no DELETE reaches the vec0 table at all.
+    assert work.sql.count(r"^DELETE FROM chunks_vec") == 0
     # Each Markdown file is opened twice (hash, then frontmatter) and its YAML parsed once.
     assert work.md_reads <= 2 * DOCS
     assert work.yaml_documents <= DOCS
@@ -174,7 +187,7 @@ def test_a_noop_reindex_does_work_proportional_to_the_vault(index_lifecycle: dic
     assert work.sql.count(r"^(INSERT|UPDATE|DELETE)\b") == work.sql.count(r"^INSERT OR REPLACE INTO meta")
     assert work.sql.rows_fetched <= rows(71)  # one (path, hash) row per document and a few counters
     assert work.sql.rows_with_column("body") == 0
-    # TIGHTEN (1.3): hash each file once (60 opens, not 120) and parse no YAML for an unchanged file (0, not 60).
+    # TIGHTEN (2.2): hash each file once (60 opens, not 120) and parse no YAML for an unchanged file (0, not 60).
     assert work.md_reads <= 2 * DOCS
     assert work.yaml_documents <= DOCS
 
@@ -182,10 +195,13 @@ def test_a_noop_reindex_does_work_proportional_to_the_vault(index_lifecycle: dic
 def test_a_one_file_change_reindexes_one_document_but_rereads_the_vault(index_lifecycle: dict[str, Work]) -> None:
     work = index_lifecycle["changed"]
 
-    assert len(work.sql.statements) <= statements(26)
+    # 1.3 adds two statements here: the stored chunk ids are selected first, then deleted one by one by id
+    # (the edited document had two chunks), where one DELETE ... WHERE id IN (SELECT ...) scanned the vec0 table.
+    assert len(work.sql.statements) <= statements(28)
     assert work.sql.commits <= 1
-    assert work.sql.count(r"^DELETE FROM chunks_vec") <= 1
-    # TIGHTEN (1.3): unchanged files are not reopened or parsed again.
+    assert work.sql.count(r"^DELETE FROM chunks_vec WHERE id = ") <= 2
+    assert work.sql.count(r"^DELETE FROM chunks_vec WHERE id IN \(SELECT") == 0
+    # TIGHTEN (2.2): unchanged files are not reopened or parsed again.
     assert work.md_reads <= 2 * DOCS
     assert work.yaml_documents <= DOCS
 
@@ -258,7 +274,7 @@ def test_search_reads_one_file_per_result(served: Served) -> None:
     for query in (served.selective[0], served.unselective[0]):
         work = measure(served.runtime, served.root, lambda q=query: _call(server.search(q, limit=5)))
 
-        assert work.md_reads <= 5  # TIGHTEN (1.4): the section selector reads the chunk, not the file
+        assert work.md_reads <= 5  # no item yet: the section selector could read the chunk, not the file
         assert work.yaml_documents <= 5
         assert work.files.writes("*") == []
 
@@ -268,9 +284,9 @@ def test_search_statements_and_rows_on_a_selective_query(served: Served) -> None
 
     assert len(work.sql.statements) <= statements(15)
     assert work.sql.rows_fetched <= rows(45)
-    # TIGHTEN (1.7a/1.7b): building a result row needs the title and review state, not the document body.
-    assert work.sql.rows_with_column("body") <= 5
-    assert work.sql.selects_column("docs", "body") <= 1
+    # 1.7a/1.7b: building a result row needs the title and review state, not the document body.
+    assert work.sql.rows_with_column("body") == 0
+    assert work.sql.selects_column("docs", "body") == 0
 
 
 def test_search_statements_and_rows_on_an_unselective_query(served: Served) -> None:
@@ -280,7 +296,7 @@ def test_search_statements_and_rows_on_an_unselective_query(served: Served) -> N
     # TIGHTEN (2.1): the keyword statement returns every matching chunk with its text; two-phase returns about k.
     assert work.sql.rows_fetched <= rows(131)
     assert work.sql.rows_with_column("text") <= rows(100)
-    assert work.sql.rows_with_column("body") <= 13
+    assert work.sql.rows_with_column("body") == 0  # 1.7a/1.7b
 
 
 def test_the_keyword_mode_is_one_lexical_statement_plus_the_row_lookups(served: Served) -> None:
@@ -305,19 +321,20 @@ def test_context_pack_work(served: Served) -> None:
 
     assert len(work.sql.statements) <= statements(15)
     assert work.sql.rows_fetched <= rows(173)  # TIGHTEN (2.1)
-    assert work.md_reads <= 8  # one file per packed row; TIGHTEN (1.4)
+    assert work.md_reads <= 8  # one file per packed row; no item yet
     assert work.yaml_documents <= 8
-    assert work.sql.rows_with_column("body") <= 22  # TIGHTEN (1.7)
+    assert work.sql.rows_with_column("body") == 0  # 1.7a/1.7b
 
 
 def test_search_deep_work(served: Served) -> None:
     work = measure(served.runtime, served.root, lambda: _call(server.search_deep(served.unselective[0])))
 
     assert len(work.sql.statements) <= statements(28)
-    # TIGHTEN (2.1, 2.3): the hop pass re-ranks every chunk of the hop files and loads their bodies for titles.
+    # TIGHTEN (2.1, 2.3): the hop pass re-ranks every chunk of the hop files.
     assert work.sql.rows_fetched <= rows(522)
-    assert work.sql.rows_with_column("body") <= 63
-    assert work.sql.selects_column("docs", "body") <= 2
+    # 1.7a/1.7b: the titles of the hop files come without their bodies.
+    assert work.sql.rows_with_column("body") == 0
+    assert work.sql.selects_column("docs", "body") == 0
     assert work.md_reads <= 5
     assert work.yaml_documents <= 5
 
@@ -331,18 +348,18 @@ def test_get_document_is_one_file_read_and_no_sql(served: Served, by: str) -> No
     work = measure(served.runtime, served.root, lambda: _call(server.get_document(**kwargs)))
 
     assert len(work.sql.statements) == 0
-    assert work.md_reads <= 2  # TIGHTEN (1.4): one read
+    assert work.md_reads <= 2  # no item yet: one read
     assert work.yaml_documents <= 1
 
 
-def test_search_by_metadata_selects_the_body_of_every_match(served: Served) -> None:
+def test_search_by_metadata_selects_no_body(served: Served) -> None:
     work = measure(served.runtime, served.root, lambda: _call(server.search_by_metadata(type="runbook")))
 
     assert len(work.sql.statements) <= statements(4)
     assert work.md_reads == 0
-    # TIGHTEN (1.7b): a listing row needs no body.
-    assert work.sql.rows_with_column("body") <= 10
-    assert work.sql.selects_column("docs", "body") <= 1
+    # 1.7b: a listing row needs no body.
+    assert work.sql.rows_with_column("body") == 0
+    assert work.sql.selects_column("docs", "body") == 0
 
 
 def test_the_graph_tools_and_list_vaults_touch_neither_sql_nor_files(served: Served) -> None:
@@ -385,7 +402,7 @@ def _tracker_files(index_dir: Path) -> tuple[Path, ...]:
     return (index_dir / "usage_stats.json", *index_dir.glob("usage_stats.json.*"))
 
 
-def test_a_usage_flush_reads_the_file_twice_and_writes_it_once(tmp_path: Path) -> None:
+def test_a_usage_flush_reads_the_file_once_and_writes_it_once(tmp_path: Path) -> None:
     tracker = UsageTracker(tmp_path / "usage_stats.json")
     tracker.record_uses(["a.md", "b.md"])
     tracker.flush()
@@ -393,14 +410,18 @@ def test_a_usage_flush_reads_the_file_twice_and_writes_it_once(tmp_path: Path) -
     with file_opens(tmp_path) as files:
         tracker.flush()
 
-    # TIGHTEN (1.5): one read (the spend and the call days come from a single parse).
-    assert files.reads("usage_stats.json") == 2
+    # 1.5: one read (the spend and the call days come from a single parse).
+    assert files.reads("usage_stats.json") == 1
     assert len(files.writes("usage_stats.json.*.tmp")) == 1  # written beside, then renamed over
     assert len(files.writes("usage_stats.json.lock")) <= 1
 
 
 def test_search_hits_flush_every_twenty_recorded_hits(tmp_path: Path) -> None:
-    """Twenty-four searches of five results are 144 recorded hits: six flushes, each rewriting the whole file."""
+    """Twenty-four searches of five results are 144 recorded hits: six flushes, each rewriting the whole file.
+
+    This is the inline tracker (``flush_interval_s=None``, the default of ``UsageTracker``); the trackers the
+    registry builds write on their ``usage-flush`` thread instead, fenced in ``tests/test_perf_budget_request.py``.
+    """
     tracker = UsageTracker(tmp_path / "usage_stats.json")
     results = [f"Doc {i}.md" for i in range(5)]
 
@@ -410,51 +431,46 @@ def test_search_hits_flush_every_twenty_recorded_hits(tmp_path: Path) -> None:
             tracker.record_pairs(results)
 
     flushes = len(files.writes("usage_stats.json.*.tmp"))
-    # TIGHTEN (1.5, 0.3): a flush no longer reads the file twice, and it happens off the calling (request) thread:
-    # today every one of these writes is made by the thread that recorded the hit, which is the latency tail.
     assert flushes <= 6
-    assert files.reads("usage_stats.json") <= 2 * flushes
+    assert files.reads("usage_stats.json") <= flushes  # 1.5: one read per flush
 
 
 # ---------------------------------------------------------------------------
 # Process start-up
 # ---------------------------------------------------------------------------
 
-#: The ``knowledge`` modules that ``--version`` and ``doctor --brief`` import today (27, because ``cli`` imports
-#: ``server``). A new import at start-up fails here; an extension module imported eagerly fails here.
-# TIGHTEN (1.2): drop ``server`` and everything only it pulls in (``gitsync``, ``memory_http``, ``review``, ``rerank``,
-# ``principals``, ``profiles``, ``registry``, ``contract``, ``extensions``, ``contexts``, ...) from the allowed set.
-STARTUP_MODULES = frozenset(
+#: The ``knowledge`` modules that ``--version`` imports (15). Since 1.2 the CLI imports ``server`` only in the
+#: subcommands that serve or load an extension, so neither it nor what only it pulls in (``gitsync``,
+#: ``memory_http``, ``review``, ``profiles``) loads here. A new import at start-up fails here.
+VERSION_MODULES = frozenset(
     {
         "knowledge",
-        "knowledge.chunker",
         "knowledge.cli",
         "knowledge.config",
         "knowledge.contexts",
         "knowledge.contract",
-        "knowledge.embeddings",
         "knowledge.errors",
         "knowledge.extensions",
-        "knowledge.gitsync",
         "knowledge.graph",
-        "knowledge.indexer",
-        "knowledge.memory_http",
-        "knowledge.pointers",
         "knowledge.ports",
         "knowledge.principals",
-        "knowledge.profiles",
-        "knowledge.registry",
         "knowledge.repos",
-        "knowledge.rerank",
-        "knowledge.review",
-        "knowledge.server",
         "knowledge.settings",
         "knowledge.stores",
         "knowledge.usage",
         "knowledge.vault_lint",
-        "knowledge.vault_source",
     }
 )
+#: ``doctor --brief`` also opens the default vault's runtime (22 modules in all).
+STARTUP_MODULES = VERSION_MODULES | {
+    "knowledge.chunker",
+    "knowledge.embeddings",
+    "knowledge.indexer",
+    "knowledge.pointers",
+    "knowledge.registry",
+    "knowledge.rerank",
+    "knowledge.vault_source",
+}
 #: Loaded only the first time a vault needs them; importing one at start-up is a regression.
 LAZY_MODULES = (
     "knowledge.flows",
@@ -466,17 +482,22 @@ LAZY_MODULES = (
     "knowledge.graph_targets",
     "knowledge.webhook",
     "knowledge.auth",
+    "knowledge.server",
 )
 
 
-@pytest.mark.parametrize("argv", [["--version"], ["doctor", "--brief"]], ids=["version", "doctor-brief"])
-def test_startup_imports_no_new_knowledge_module(argv: list[str]) -> None:
+@pytest.mark.parametrize(
+    ("argv", "allowed"),
+    [(["--version"], VERSION_MODULES), (["doctor", "--brief"], STARTUP_MODULES)],
+    ids=["version", "doctor-brief"],
+)
+def test_startup_imports_no_new_knowledge_module(argv: list[str], allowed: frozenset[str]) -> None:
     env = {**os.environ, "KNOWLEDGE_EMBEDDINGS_PROVIDER": "bag-of-words"}
 
     modules = modules_after_cli(argv, env)
 
     imported = {name for name in modules if name == "knowledge" or name.startswith("knowledge.")}
-    assert imported <= STARTUP_MODULES, f"new start-up imports: {sorted(imported - STARTUP_MODULES)}"
+    assert imported <= allowed, f"new start-up imports: {sorted(imported - allowed)}"
     assert not imported & set(LAZY_MODULES)
 
 
