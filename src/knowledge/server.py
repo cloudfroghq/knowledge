@@ -2768,9 +2768,6 @@ def sync_jira(vault: str | None = None, dry_run: bool = True, since: str | None 
 # ---------------------------------------------------------------------------
 
 
-_HEADER_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
-
-
 def _normalise_header_text(text: str) -> str:
     """Normalise a header for fuzzy matching: lowercase, strip #/digits, trim."""
     s = text.strip().lower()
@@ -2782,69 +2779,49 @@ def _normalise_header_text(text: str) -> str:
 
 
 def _list_headers(body: str) -> list[str]:
-    """Return all markdown headers in *body* in document order (text only)."""
-    headers: list[str] = []
-    for line in body.splitlines():
-        m = _HEADER_RE.match(line)
-        if m:
-            headers.append(m.group(2).strip())
-    return headers
+    """Return all markdown headers in *body* in document order (text only).
+
+    Headings are the ones ``pointers.headings`` sees, so a ``#`` line inside a
+    fenced code block (a shell comment, say) is code, not a heading.
+    """
+    return [head.text for head in pointers.headings(body)]
 
 
 def _extract_section(body: str, section: str) -> str | None:
     """Return the slice of *body* under the header that fuzzy-matches *section*.
 
     Section ends at the next header of the same level or shallower (smaller
-    number of ``#``). Returns None if no matching header is found.
+    number of ``#``), exactly the block a ``chunk_id`` names. Headers inside
+    fenced code blocks do not count. Returns None if no matching header is
+    found.
     """
     target = _normalise_header_text(section)
     if not target:
         return None
 
-    lines = body.splitlines()
-    start_idx: int | None = None
-    start_level: int = 0
+    heads = pointers.headings(body)
 
     # Two-pass: prefer exact normalised match before falling back to substring.
     # Substring matches require at least 3 chars on the shorter side to avoid
     # silly hits like target "x" matching every header that contains "x".
-    exact_idx: int | None = None
-    exact_level: int = 0
-    fuzzy_idx: int | None = None
-    fuzzy_level: int = 0
+    chosen: pointers.Heading | None = None
+    fuzzy: pointers.Heading | None = None
 
-    for i, line in enumerate(lines):
-        m = _HEADER_RE.match(line)
-        if not m:
-            continue
-        level = len(m.group(1))
-        text = _normalise_header_text(m.group(2))
+    for head in heads:
+        text = _normalise_header_text(head.text)
         if text == target:
-            exact_idx = i
-            exact_level = level
+            chosen = head
             break
-        if fuzzy_idx is None and min(len(text), len(target)) >= 3 and (
+        if fuzzy is None and min(len(text), len(target)) >= 3 and (
             target in text or text in target
         ):
-            fuzzy_idx = i
-            fuzzy_level = level
+            fuzzy = head
 
-    if exact_idx is not None:
-        start_idx, start_level = exact_idx, exact_level
-    elif fuzzy_idx is not None:
-        start_idx, start_level = fuzzy_idx, fuzzy_level
-
-    if start_idx is None:
+    chosen = chosen or fuzzy
+    if chosen is None:
         return None
 
-    end_idx = len(lines)
-    for j in range(start_idx + 1, len(lines)):
-        m = _HEADER_RE.match(lines[j])
-        if m and len(m.group(1)) <= start_level:
-            end_idx = j
-            break
-
-    return "\n".join(lines[start_idx:end_idx]).strip()
+    return pointers.block(body, chosen.ordinal, heads)
 
 
 # ---------------------------------------------------------------------------
