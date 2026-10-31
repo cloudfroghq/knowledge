@@ -16,6 +16,7 @@ import json
 import shutil
 import unicodedata
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -315,6 +316,57 @@ def test_a_failed_save_leaves_the_saved_graph_untouched(tmp_path: Path, monkeypa
         graph.save(graph_file)
 
     assert graph_file.read_text() == saved
+
+
+# --- what a saved graph holds, whatever its whitespace -----------------------------
+
+
+def _learned_graph(tmp_path: Path) -> LinkGraph:
+    """The links fixture's graph with three learned weights, one of them on a pair that is not an edge."""
+    indexer = _indexer(LINKS_VAULT, tmp_path)
+    indexer.index()
+    graph = indexer.graph
+    assert graph.reinforce(HUB, ALPHA_NOTE, 3)
+    assert graph.reinforce(OTHER, GLOSSARY, 40)
+    assert graph.reinforce(HUB, OTHER, 7)  # no edge: save() prunes it
+    return graph
+
+
+def _state(graph: LinkGraph) -> tuple[Any, ...]:
+    return (graph._outgoing, graph._incoming, graph._weights, graph.resolver)
+
+
+def test_a_saved_graph_loads_back_as_it_was_saved(tmp_path: Path) -> None:
+    graph = _learned_graph(tmp_path / "state")
+    graph_file = tmp_path / "link_graph.json"
+
+    graph.save(graph_file)
+    loaded = LinkGraph.load(graph_file)
+
+    assert loaded._outgoing == graph._outgoing and loaded._incoming == graph._incoming
+    assert loaded.resolver == RESOLVER_VERSION
+    assert loaded._weights == {
+        "||".join(sorted((HUB, ALPHA_NOTE))): round(graph.weight(HUB, ALPHA_NOTE), 4),
+        "||".join(sorted((OTHER, GLOSSARY))): round(graph.weight(OTHER, GLOSSARY), 4),
+    }
+    data = json.loads(graph_file.read_text())
+    assert list(data) == ["resolver", "outgoing", "incoming", "weights"]
+    assert all(targets == sorted(targets) for targets in data["outgoing"].values())
+    assert all(sources == sorted(sources) for sources in data["incoming"].values())
+
+
+@pytest.mark.parametrize("indent", [2, None], ids=["indented", "compact"])
+def test_a_graph_file_loads_the_same_in_either_format(tmp_path: Path, indent: int | None) -> None:
+    """Files written before and after the compact format load to the same graph."""
+    graph = _learned_graph(tmp_path / "state")
+    reference = tmp_path / "link_graph.json"
+    graph.save(reference)
+    data = json.loads(reference.read_text())
+    rewritten = tmp_path / "rewritten.json"
+    separators = None if indent else (",", ":")
+    rewritten.write_text(json.dumps(data, ensure_ascii=False, indent=indent, separators=separators))
+
+    assert _state(LinkGraph.load(rewritten)) == _state(LinkGraph.load(reference))
 
 
 def test_the_linter_skips_dot_directories_when_looking_for_attachments(tmp_path: Path) -> None:

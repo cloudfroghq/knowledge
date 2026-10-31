@@ -53,6 +53,12 @@ from knowledge.vault_source import DirectoryVaultSource
 
 log = logging.getLogger(__name__)
 
+#: Seconds a runtime's usage tracker waits, after the first pending hit, before
+#: its background writer writes ``usage_stats.json``: at most one write per
+#: interval. A hard crash loses at most this much of the counts;
+#: ``VaultRegistry.close`` and interpreter exit write the rest.
+USAGE_FLUSH_INTERVAL_S = 2.0
+
 try:  # POSIX only; elsewhere two migrations of one directory are not serialized.
     import fcntl
 except ImportError:  # pragma: no cover - Windows
@@ -132,7 +138,7 @@ def build_runtime(
         embedder=embedder,
         state_dir=spec.index_dir,
     )
-    usage = UsageTracker(spec.index_dir / "usage_stats.json")
+    usage = UsageTracker(spec.index_dir / "usage_stats.json", flush_interval_s=USAGE_FLUSH_INTERVAL_S)
     return VaultRuntime(
         spec=spec,
         indexer=indexer,
@@ -271,12 +277,12 @@ class VaultRegistry:
             return self._runtimes.get(self._default)
 
     def close(self) -> None:
-        """Flush the usage of every opened runtime and close its store, checkpointing what it wrote."""
+        """Close the usage tracker of every opened runtime (writing what it has pending) and close its store."""
         with self._lock:
             runtimes = list(self._runtimes.values())
         for runtime in runtimes:
             try:
-                runtime.usage.flush_if_dirty()
+                runtime.usage.close()
             except Exception:
                 log.exception("usage: flush on close failed for %s", runtime.spec.slug)
             close = getattr(runtime.indexer.store, "close", None)

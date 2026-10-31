@@ -489,9 +489,10 @@ class LinkGraph:
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         # One temporary file per writer: a reindex and a debounced weight save
-        # may write the same graph from two threads.
+        # may write the same graph from two threads. Compact JSON: the file is
+        # a sidecar no one reads by eye, and load() parses either format.
         tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        tmp.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")))
         os.replace(tmp, path)
         log.info("Graph saved to %s (%d learned weights)", path, len(learned))
 

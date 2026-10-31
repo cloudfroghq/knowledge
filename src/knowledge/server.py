@@ -19,6 +19,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar, Token
 from pathlib import Path
@@ -71,6 +73,9 @@ class KnowledgeMCP(FastMCP):
     The count goes to the usage tracker of the default vault (section
     ``tool_calls`` of its ``usage_stats.json``): the tool name, the client
     that sent the call and the principal of its bearer, never an argument.
+    How long the call took goes to section ``tool_latency``, as one count in
+    a fixed bucket under the day and the tool name alone. The timer only reads
+    the clock around the call.
     The response is the one FastMCP builds, untouched, and a count that
     cannot be recorded is logged and never fails the call. The count is
     recorded off the event loop and the response does not wait for it: a
@@ -86,6 +91,7 @@ class KnowledgeMCP(FastMCP):
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Sequence[ContentBlock] | dict[str, Any]:
         failed = True
+        started = time.perf_counter()
         try:
             if self._tool_manager.get_tool(name) is None:
                 _refuse_unregistered(name)
@@ -93,7 +99,7 @@ class KnowledgeMCP(FastMCP):
             failed = isinstance(result, CallToolResult) and bool(result.isError)
             return result
         finally:
-            _count_call(self, name, failed=failed)
+            _count_call(self, name, failed=failed, latency_ms=(time.perf_counter() - started) * 1000.0)
 
 
 def _refuse_unregistered(name: str) -> None:
@@ -143,7 +149,7 @@ def _caller(app: FastMCP) -> tuple[str | None, str | None]:
 _COUNTS = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="tool-call-count")
 
 
-def _count_call(app: FastMCP, name: str, *, failed: bool) -> None:
+def _count_call(app: FastMCP, name: str, *, failed: bool, latency_ms: float | None = None) -> None:
     """Queue one count of ``name`` for the default vault's tracker; never blocks the caller.
 
     The client and the principal are read here, inside the request, and the
@@ -153,12 +159,14 @@ def _count_call(app: FastMCP, name: str, *, failed: bool) -> None:
     """
     try:
         client, principal = _caller(app)
-        _COUNTS.submit(_record_count, name, client, principal, failed)
+        _COUNTS.submit(_record_count, name, client, principal, failed, latency_ms)
     except Exception:
         log.exception("tool-call count failed — the call is unaffected")
 
 
-def _record_count(name: str, client: str | None, principal: str | None, failed: bool) -> None:
+def _record_count(
+    name: str, client: str | None, principal: str | None, failed: bool, latency_ms: float | None = None
+) -> None:
     """Count one call of ``name`` on the default vault's tracker, when that vault is open.
 
     ``serve`` opens the default vault before it serves, so every call of a
@@ -171,7 +179,7 @@ def _record_count(name: str, client: str | None, principal: str | None, failed: 
         runtime = reg.default_if_open() if reg is not None else None
         if runtime is None:
             return
-        runtime.usage.record_call(name, client=client, principal=principal, error=failed)
+        runtime.usage.record_call(name, client=client, principal=principal, error=failed, latency_ms=latency_ms)
     except Exception:
         log.exception("tool-call count failed — the call is unaffected")
 
@@ -1021,13 +1029,61 @@ def _shape_rows(
 
 _HEBBIAN_SAVE_EVERY = 10
 
+# One worker, so the saves of a process never race each other; a save writes
+# the runtime's graph as it is when the save starts, never the one it had when
+# it was queued.
+_GRAPH_SAVES = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="graph-save")
+# ``id`` of every runtime with a save queued and not started: at most one waits per runtime.
+_graph_saves_queued: set[int] = set()
+_graph_saves_lock = threading.Lock()
+
+
+def _queue_graph_save(rt: VaultRuntime) -> None:
+    """Save ``rt``'s learned weights on the graph-save worker; a save already waiting covers this one."""
+    key = id(rt)
+    with _graph_saves_lock:
+        if key in _graph_saves_queued:
+            return
+        _graph_saves_queued.add(key)
+    try:
+        _GRAPH_SAVES.submit(_save_graph, rt, key)
+    except RuntimeError:  # the interpreter is shutting down: save here, as before
+        with _graph_saves_lock:
+            _graph_saves_queued.discard(key)
+        _save_graph(rt, key)
+
+
+def _save_graph(rt: VaultRuntime, key: int) -> None:
+    """Write ``rt``'s current graph; written again when a reindex swapped in a new one meanwhile.
+
+    A reindex swaps its graph in and then saves it itself. Re-reading the
+    graph after the write means an older graph's file never lands after the
+    newer one: either this save saw the swap and writes the new graph again,
+    or the swap comes later and the reindex's own save is the last write.
+    """
+    with _graph_saves_lock:
+        _graph_saves_queued.discard(key)
+    try:
+        before = rt.indexer.graph
+        rt.indexer.save_graph()
+        if rt.indexer.graph is not before:
+            rt.indexer.save_graph()
+    except Exception:
+        log.exception("graph save failed — results unaffected")
+
+
+def drain_graph_saves(timeout: float | None = None) -> None:
+    """Wait until every graph save queued so far is written; ``TimeoutError`` after ``timeout`` seconds."""
+    _GRAPH_SAVES.submit(lambda: None).result(timeout=timeout)
+
 
 def _track_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Record retrieval usage and reinforce co-retrieved linked pairs.
 
     Usage feeds the bounded ranking boost; co-retrieval within the 30-day
     window strengthens existing graph edges (Hebbian: docs consulted
-    together wire together). Graph saves are debounced.
+    together wire together). Graph saves are debounced and run on the
+    graph-save worker, never on the request thread.
     """
     fps = [r["file_path"] for r in results if r.get("file_path")]
     if not fps:
@@ -1046,7 +1102,7 @@ def _track_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if changed:
             rt.hebbian_dirty["count"] += changed
             if rt.hebbian_dirty["count"] >= _HEBBIAN_SAVE_EVERY:
-                rt.indexer.save_graph()
+                _queue_graph_save(rt)
                 rt.hebbian_dirty["count"] = 0
     except Exception:
         log.exception("usage tracking failed — results unaffected")
@@ -1415,11 +1471,37 @@ def _memory_filter(rt: VaultRuntime, include_memories: bool) -> ChunkFilter | No
 
 
 def _documents(rt: VaultRuntime, file_paths: set[str]) -> dict[str, DocRecord]:
-    """The stored document of each path in ``file_paths``."""
+    """The stored document of each path in ``file_paths``, without its body (see :func:`_documents_without_body`)."""
     if not file_paths:
         return {}
-    found = rt.indexer.store.documents(ChunkFilter(file_paths=tuple(sorted(file_paths))))
+    found = _documents_without_body(rt.indexer.store, ChunkFilter(file_paths=tuple(sorted(file_paths))))
     return {doc.file_path: doc for doc in found}
+
+
+# Whether a store's ``documents`` accepts ``with_body``, by the function behind it.
+_TAKES_WITH_BODY: dict[Any, bool] = {}
+
+
+def _documents_without_body(store: Any, flt: ChunkFilter | None) -> list[DocRecord]:
+    """``store.documents(flt)``, asking the store to leave every ``body`` out when it can.
+
+    Only for callers that never read ``DocRecord.body``: titles, frontmatter
+    fields and ``metadata()``, which excludes the body. A store whose
+    ``documents`` takes no ``with_body`` keyword answers with the bodies, as
+    before; every other field is the same either way.
+    """
+    documents = store.documents
+    key = getattr(documents, "__func__", documents)
+    takes = _TAKES_WITH_BODY.get(key)
+    if takes is None:
+        try:
+            params = inspect.signature(documents).parameters.values()
+        except (TypeError, ValueError):
+            params = ()
+        # Named only: a ``**kwargs`` delegate may forward it to a store that refuses it.
+        takes = any(p.name == "with_body" and p.kind is not inspect.Parameter.VAR_KEYWORD for p in params)
+        _TAKES_WITH_BODY[key] = takes
+    return documents(flt, with_body=False) if takes else documents(flt)
 
 
 def _lexical(rt: VaultRuntime, query: str, k: int, flt: ChunkFilter | None) -> list[tuple[str, float, str, int]]:
@@ -1677,7 +1759,7 @@ def search_by_metadata(
     rt = _ensure_indexed()
     equals = {key: value for key, value in (("type", type), ("service", service), ("status", status)) if value}
     out: list[dict[str, Any]] = []
-    for doc in rt.indexer.store.documents(ChunkFilter(equals=equals, tag=tag or None)):
+    for doc in _documents_without_body(rt.indexer.store, ChunkFilter(equals=equals, tag=tag or None)):
         fp = doc.file_path
         entry: dict[str, Any] = {"file_path": fp}
 
@@ -2110,11 +2192,11 @@ def get_stale_docs(
     _limit_arg("limit", limit, 1, STALE_LIMIT_MAX)
     rt = _ensure_indexed()
     store = rt.indexer.store
-    docs = store.documents(ChunkFilter(equals={"type": type}) if type else None)
+    docs = _documents_without_body(store, ChunkFilter(equals={"type": type}) if type else None)
 
     # Service hubs are fetched separately: a `type` filter above would hide
     # them, and they are the only documents that declare `owner`.
-    hubs = store.documents(ChunkFilter(equals={"type": review.SERVICE_HUB_TYPE}))
+    hubs = _documents_without_body(store, ChunkFilter(equals={"type": review.SERVICE_HUB_TYPE}))
     service_owners = review.build_service_owner_map(doc.metadata() for doc in hubs)
 
     excluded = vault_lint.index_exclude_matcher(rt.spec.index_exclude)
@@ -2864,6 +2946,10 @@ def serve(s: _settings.Settings) -> None:
             drain_tool_call_counts(timeout=10)
         except concurrent.futures.TimeoutError:
             log.warning("tool-call counts still waiting on the usage file lock — closing without them")
+        try:
+            drain_graph_saves(timeout=10)
+        except concurrent.futures.TimeoutError:
+            log.warning("a link graph save is still running — closing without waiting for it")
         registry().close()
 
 

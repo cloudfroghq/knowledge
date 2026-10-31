@@ -484,7 +484,7 @@ def test_doctor_reports_the_tool_calls_of_the_default_vault(
     doctor_env: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     tracker = UsageTracker(doctor_env / "index" / "usage_stats.json")
-    tracker.record_call("search", client="claude-code", principal="stdio", error=False)
+    tracker.record_call("search", client="claude-code", principal="stdio", error=False, latency_ms=14.0)
     tracker.record_call("search_code", client="claude-code", principal="stdio", error=False)
     tracker.flush()
 
@@ -498,6 +498,8 @@ def test_doctor_reports_the_tool_calls_of_the_default_vault(
     assert block["deprecated"] == {"search_code": 1}
     assert block["unregistered"] == {}
     assert "search" in contract.TOOL_SINCE and "search_code" in contract.TOOL_REMOVED
+    # Only the timed call has a histogram; an untimed one adds nothing to it.
+    assert block["latency_ms"] == {"search": {"calls": 1, "p50": 20, "p95": 20}}
 
 
 def test_doctor_without_calls_reports_an_empty_block_and_writes_nothing(
@@ -507,6 +509,7 @@ def test_doctor_without_calls_reports_an_empty_block_and_writes_nothing(
     block = json.loads(capsys.readouterr().out)["vaults"][0]["tool_calls"]
 
     assert block["kept"]["calls"] == 0 and block["first_day"] is None
+    assert "latency_ms" not in block  # no timed call: the block is the one 0.9.0 reported
     assert not (doctor_env / "index").exists()
 
 
