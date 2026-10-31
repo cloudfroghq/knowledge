@@ -29,6 +29,7 @@ import time
 import unicodedata
 from array import array
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -257,9 +258,10 @@ class InMemoryVectorStore:
             ]
             return _knn_order(hits, k)
 
-    def documents(self, flt: ChunkFilter | None = None) -> list[DocRecord]:
+    def documents(self, flt: ChunkFilter | None = None, *, with_body: bool = True) -> list[DocRecord]:
         with self._lock:
-            return [self._docs[path] for path in self._admitted(flt)]
+            found = [self._docs[path] for path in self._admitted(flt)]
+        return found if with_body else [replace(doc, body="") for doc in found]
 
     def chunks(self, file_paths: Iterable[str]) -> list[ChunkRecord]:
         with self._lock:
@@ -355,9 +357,8 @@ _SCHEMA = (
         id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE, embedding BLOB NOT NULL)""",
 )
 
-_DOC_COLUMNS = (
-    "file_path, doc_id, title, type, service, status, owner, last_verified, last_updated, file_hash, body"
-)
+_DOC_COLUMNS_NO_BODY = "file_path, doc_id, title, type, service, status, owner, last_verified, last_updated, file_hash"
+_DOC_COLUMNS = f"{_DOC_COLUMNS_NO_BODY}, body"
 
 
 def _while_locked(step: Callable[[], Any], *, seconds: float = 5.0) -> Any:
@@ -827,13 +828,14 @@ class SQLiteStore:
         rows = self._reader().execute("SELECT file_path, file_hash FROM docs").fetchall()
         return {str(path): str(digest) for path, digest in rows}
 
-    def documents(self, flt: ChunkFilter | None = None) -> list[DocRecord]:
+    def documents(self, flt: ChunkFilter | None = None, *, with_body: bool = True) -> list[DocRecord]:
         conn = self._reader()
         where, params = _doc_where(flt)
+        columns = _DOC_COLUMNS if with_body else _DOC_COLUMNS_NO_BODY
         conn.execute("BEGIN")
         try:
             rows = conn.execute(
-                f"SELECT {_DOC_COLUMNS} FROM docs d WHERE {where} ORDER BY d.file_path", params
+                f"SELECT {columns} FROM docs d WHERE {where} ORDER BY d.file_path", params
             ).fetchall()
             tags: dict[str, list[str]] = {}
             if rows:
@@ -849,7 +851,7 @@ class SQLiteStore:
             DocRecord(
                 file_path=row[0], doc_id=row[1], title=row[2], type=row[3], service=row[4], status=row[5],
                 owner=row[6], last_verified=row[7], last_updated=row[8], file_hash=row[9],
-                tags=tuple(tags.get(row[0], ())), body=row[10],
+                tags=tuple(tags.get(row[0], ())), body=row[10] if with_body else "",
             )
             for row in rows
         ]

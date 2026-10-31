@@ -12,6 +12,7 @@ the vectors and not the standard-library fallback.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import sqlite3
 import subprocess
@@ -295,6 +296,23 @@ def test_documents_are_filtered_and_ordered_by_path(store: Any, flt: ChunkFilter
     _load(store)
     expected = sorted((doc for doc, _, _ in CORPUS if flt is None or flt.admits(doc)), key=lambda d: d.file_path)
     assert store.documents(flt) == expected
+
+
+@pytest.mark.parametrize("flt", _FILTERS, ids=[repr(f) for f in _FILTERS])
+def test_documents_without_body_differ_only_in_the_body(store: Any, flt: ChunkFilter | None) -> None:
+    _load(store)
+    with_body = store.documents(flt)
+    without = store.documents(flt, with_body=False)
+    assert without == [dataclasses.replace(doc, body="") for doc in with_body]
+    assert store.documents(flt, with_body=True) == with_body
+    assert [doc.metadata() for doc in without] == [doc.metadata() for doc in with_body]
+    assert all(doc.body == "" for doc in without)
+
+
+@pytest.mark.parametrize("flt", _FILTERS, ids=[repr(f) for f in _FILTERS])
+def test_both_stores_agree_on_documents_without_body(both: tuple[Any, Any], flt: ChunkFilter | None) -> None:
+    memory, sqlite = (_load(s) for s in both)
+    assert sqlite.documents(flt, with_body=False) == memory.documents(flt, with_body=False)
 
 
 def test_tags_keep_their_order_and_duplicates(store: Any) -> None:

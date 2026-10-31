@@ -169,7 +169,10 @@ class VectorStore(Protocol):
     for a provider without meaning; otherwise it holds one vector per chunk,
     and the first vector ever written fixes the dimension. ``knn`` returns at
     most ``k`` chunks by descending cosine similarity, ties by path and then
-    chunk number; ``documents`` returns documents by path.
+    chunk number; ``documents`` returns documents by path. With
+    ``with_body=False`` it does not read the bodies and every record carries
+    ``body=""``, its other fields unchanged: a caller that uses ``body`` must
+    leave it ``True``.
     """
 
     @property
@@ -193,7 +196,7 @@ class VectorStore(Protocol):
 
     def knn(self, vector: Sequence[float], k: int, flt: ChunkFilter | None = None) -> list[ChunkHit]: ...
 
-    def documents(self, flt: ChunkFilter | None = None) -> list[DocRecord]: ...
+    def documents(self, flt: ChunkFilter | None = None, *, with_body: bool = True) -> list[DocRecord]: ...
 
     def chunks(self, file_paths: Iterable[str]) -> list[ChunkRecord]: ...
 

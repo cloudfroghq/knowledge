@@ -19,6 +19,7 @@ from synthetic_vault import Manifest, generate
 from knowledge import stores
 from knowledge.embeddings import build_embedder
 from knowledge.indexer import VaultIndexer
+from knowledge.ports import ChunkFilter, ChunkRecord, DocRecord
 from knowledge.stores import SQLiteStore
 
 DOCS = 300
@@ -94,8 +95,6 @@ def test_a_keyword_only_build_also_commits_once_per_batch(manifest: Manifest, tm
 
 def test_replace_file_is_still_one_transaction(tmp_path: Path) -> None:
     _need_vec()
-    from knowledge.ports import ChunkRecord, DocRecord
-
     store = SQLiteStore.open(tmp_path / "idx")
     try:
         doc = DocRecord(file_path="a.md", doc_id="a", title="A", file_hash="h", body="x")
@@ -110,3 +109,26 @@ def test_replace_file_is_still_one_transaction(tmp_path: Path) -> None:
         assert trace.statements == []
     finally:
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# 1.7a documents without their body
+# ---------------------------------------------------------------------------
+
+
+def test_documents_without_body_never_read_the_body_column(indexer: VaultIndexer) -> None:
+    indexer.index()
+    store = indexer.store
+    for flt in (None, ChunkFilter(equals={"type": "runbook"}), ChunkFilter(tag="incident")):
+        with sql_trace(store) as full:
+            with_body = store.documents(flt)
+        with sql_trace(store) as lean:
+            without = store.documents(flt, with_body=False)
+        assert len(without) == len(with_body)
+        assert full.selects_column("docs", "body") == 1
+        assert lean.selects_column("docs", "body") == 0
+        assert lean.rows_with_column("body") == 0
+        assert not any(" body" in statement.split(" FROM ")[0] for statement in lean.statements)
+        # The same statements otherwise, and the same rows (documents plus tags).
+        assert len(lean.statements) == len(full.statements)
+        assert lean.rows_fetched == full.rows_fetched
