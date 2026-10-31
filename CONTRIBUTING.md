@@ -50,7 +50,7 @@ Run these before you open a pull request. They are the same commands ring 1 runs
 | `(cd npm && npm test)` | `node --test` passes with 0 failures (a trailing `npm notice` about a newer npm is noise) |
 | `uv run mypy src/knowledge` | optional: a development tool in the dev group, **not** a gate; no workflow runs it |
 
-Do not run `uv build` on your machine: the build runs on the CI runner (`release-check.yml` and `publish.yml` build the sdist and the wheel and check what they carry with `tests/test_sdist_contents.py`).
+`uv build --out-dir <temporary dir outside the repo>` (for example `uv build --out-dir "$(mktemp -d)"`) is fine as an optional local packaging check. Never commit `dist/`, and never upload an artifact you built locally: every published sdist and wheel is built and published only by `.github/workflows/publish.yml` on the runner, and `release-check.yml` checks them (what they carry is asserted by `tests/test_sdist_contents.py`).
 
 Coverage is gated on the patch, not on the repository total. In CI, on pull requests, ring 1 runs `diff-cover` against `origin/main`, and the lines your change touches must reach 80 % (`fail_under = 80` under `[tool.diff_cover]` in `pyproject.toml`, so the gate and your machine cannot disagree). There is no floor on total coverage, on purpose: on a codebase with historical debt a global floor is either unreachable or met with tests that assert nothing (see the comment in `pyproject.toml`).
 
@@ -58,7 +58,7 @@ Coverage is gated on the patch, not on the repository total. In CI, on pull requ
 
 - **No IPv6.** On a host without IPv6, `tests/test_suite_isolation.py::test_a_connection_outside_the_loopback_fails[2001:db8::1]` fails with `OSError: [Errno 97] Address family not supported by protocol`. It is environmental, not a bug; it passes on CI and on a normal machine.
 - **Running as root.** A couple of tests that rely on file permissions are skipped when the suite runs as root.
-- **Expected skips.** One test runs only with `KNOWLEDGE_REQUIRE_SQLITE_VEC=1`, and one needs an external checkout (`AI_ARCH_ROOT`).
+- **Expected skips.** One test runs only with `KNOWLEDGE_REQUIRE_SQLITE_VEC=1`, and one runs an external template validator that is not part of this repository, so it skips without it.
 - **Case sensitivity.** CI runs on Linux. macOS's case-insensitive filesystem once hid a real defect, so verify any new path with real case sensitivity before the pull request.
 
 ### Gate canaries
@@ -119,7 +119,7 @@ The server never writes inside a vault outside `90 - Memory/` ([ADR-044](docs/ad
 | Indexing bugfix | Direct (3 files or fewer); reproduce with `tests/fixtures/vault/`, never with a real vault | The indexer's suite |
 | Vault content change | Human PR in the vault's repository with the owner as reviewer (D-11) | Frontmatter validated, wikilinks resolved, Mermaid rendered |
 | Layer refactor | SDD plus characterization tests; the golden master of every golden session, with no diff | `import-linter` plus an empty response diff |
-| Incident (MCP down or stale index) | Runbook plus RDD High; check `/health` first | Comment and transition on the D-06 allowlist |
+| Incident (MCP down or stale index) | Runbook plus RDD High; check `/health` first | Incident write-up on its tracking issue, with the `/health` output |
 
 ## Commits and pull requests
 
@@ -141,4 +141,4 @@ Maintainers cut releases; a contributor's PR never bumps the version.
 
 ## Licensing of contributions
 
-This repository is licensed under the [PolyForm Shield License 1.0.0](LICENSE), a source-available license. By submitting a contribution, you agree that it is made under the same license as the repository.
+This repository is licensed under the [MIT License](LICENSE). Contributions are accepted under the same license (inbound = outbound): by submitting a contribution, you agree that it is licensed under the MIT License, as the rest of the repository is.

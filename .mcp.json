@@ -15,7 +15,7 @@
     },
     "graphify": {
       "type": "stdio",
-      "command": "${GRAPHIFY_MCP_BIN:-/opt/homebrew/bin/graphify-mcp}",
+      "command": "${GRAPHIFY_MCP_BIN:-graphify-mcp}",
       "args": [
         "${CLAUDE_PROJECT_DIR:-.}/graphify-out/graph.json",
         "--transport",

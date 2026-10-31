@@ -4,7 +4,7 @@
 #
 # Vaults are injected, never baked in. Put the content of a vaults.yaml in
 # KNOWLEDGE_VAULTS_YAML (a multi-line value; with `docker compose` a `|` block
-# in an override, in Dokploy the environment panel):
+# in an override, on a deployment platform its environment panel):
 #
 #   version: 1
 #   vaults:

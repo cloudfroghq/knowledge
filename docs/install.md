@@ -200,7 +200,7 @@ rerank:
 
 | Variable | What it is |
 |---|---|
-| `TYPESAFE_API_KEY` / `<PREFIX>_TYPESAFE_API_KEY` | The TypeSafe key, with the name declared by `rerank.key_env`. Exported in the session environment (or the Dokploy service's), never in a file of the repo. Opened from the Dock, Claude Code does not inherit your shell: you need `launchctl setenv`. Without it the server starts anyway, over stdio and over HTTP, with `W_RERANK_KEY_MISSING`, and that vault searches without a judge. |
+| `TYPESAFE_API_KEY` / `<PREFIX>_TYPESAFE_API_KEY` | The TypeSafe key, with the name declared by `rerank.key_env`. Exported in the session environment (or the deployment platform's service environment), never in a file of the repo. Opened from the Dock, Claude Code does not inherit your shell: you need `launchctl setenv`. Without it the server starts anyway, over stdio and over HTTP, with `W_RERANK_KEY_MISSING`, and that vault searches without a judge. |
 | `KNOWLEDGE_RERANK` | `off` turns the judge off for every vault in the process. |
 | `KNOWLEDGE_RERANK_PROVIDERS` | Allowed providers (`jev,kev` by default). |
 | `KNOWLEDGE_RERANK_BASE_URL` | Replaces every judge's URL: `https://api.typesafe.ai` or an `http` on loopback. |

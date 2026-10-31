@@ -1,7 +1,7 @@
 graph TD
     CC["Claude Code (MCP Client)<br/>HTTP + Bearer auth"]
-    CC -->|"https /mcp"| TRAEFIK["Reverse proxy (TLS)"]
-    TRAEFIK --> SERVER
+    CC -->|"https /mcp"| PROXY["Reverse proxy (TLS)"]
+    PROXY --> SERVER
 
     subgraph CONTAINER["knowledge-mcp container"]
         SERVER["server.py<br/>FastMCP streamable-http"]

@@ -7,7 +7,7 @@ paths:
 
 # Branch patterns and merge destinations
 
-Source of authority: Confluence page "Branch" (id 6421610526) adopting Conventional Branch.
+Branch names follow the Conventional Branch convention. An issue key (`<KEY>-<n>`, as an issue tracker prints it) may replace the description, but a short kebab-case description is the default.
 
 ## Pattern reference
 
@@ -21,10 +21,10 @@ Branch names follow the regex pattern:
 
 | Work type | Pattern | Example | Merge destination |
 |---|---|---|---|
-| New tool or response-shape change | `feature/PROJ-NNNNN` | `feature/PROJ-11002` | `main` |
-| Repair of a broken tool (`search_by_metadata`, `search_deep`, `compare_flows`) | `fix/PROJ-NNNNN` | `fix/PROJ-11003` | `main` |
-| Indexing bugfix | `fix/PROJ-NNNNN` | `fix/PROJ-11004` | `main` |
-| Layer refactor (core/ext/http layers, `.importlinter`) | `refactor/PROJ-NNNNN` or `refactor/<kebab-desc>` | `refactor/tools-layer-boundary` | `main` |
+| New tool or response-shape change | `feature/<kebab-desc>` | `feature/get-flow-pagination` | `main` |
+| Repair of a broken tool (`search_by_metadata`, `search_deep`, `compare_flows`) | `fix/<kebab-desc>` | `fix/search-deep-await` | `main` |
+| Indexing bugfix | `fix/<kebab-desc>` | `fix/indexer-tag-filter` | `main` |
+| Layer refactor (core/ext/http layers, `.importlinter`) | `refactor/<kebab-desc>` | `refactor/tools-layer-boundary` | `main` |
 | Chore | `chore/<kebab-desc>` | `chore/ruff-baseline-refresh` | `main` |
 | Documentation (server code, not the vault) | `docs/<topic>` | `docs/tool-inventory-refresh` | `main` |
 | Release | Annotated tag, no branch | `vX.Y.Z` | N/A (the tag is the release) |

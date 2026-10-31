@@ -47,7 +47,7 @@ A dynamic memory base reusable across several projects: an MCP server that expos
 - SQLite as the store: one `index.sqlite` per vault (documents, chunks, FTS5 `unicode61 remove_diacritics 2` and float32 vectors that `sqlite-vec==0.1.9` queries by KNN with `k = ?`). `chromadb` is not a dependency: `migrate-index` takes only `usage_stats.json` and the weights in `link_graph.json` from a Chroma directory, without opening its database. There are no Testcontainers: the suite uses a real `SQLiteStore` in a temporary directory and embeds with the `bag-of-words` provider (`knowledge.embeddings.BagOfWordsEmbeddings`, a deterministic bag of words over a fixed vocabulary), which `tests/conftest.py` and `tests/golden_stdio_server.py` select with `KNOWLEDGE_EMBEDDINGS_PROVIDER=bag-of-words`; nothing is patched.
 - Where a vault's index lives: with `vaults.yaml`, `<data_dir>/<slug>`; with `VAULT_PATH` (the slug is `CHROMA_COLLECTION`, then the `slug` in the vault's `vault.yaml` and, with neither, `vault`), the first of `KNOWLEDGE_INDEX_DIR`, `CHROMA_PERSIST_DIR` (it remains a destination on purpose: the image sets it to `/data/chroma`, and a deployment whose compose file is not here may mount that directory), `<KNOWLEDGE_HOME>/<slug>` (only with an explicit `KNOWLEDGE_HOME`) and `<root>/.data/<slug>`. Next to `index.sqlite` live `link_graph.json`, `usage_stats.json`, `index_meta.json` and `skipped_files.json`.
 - `sqlite-vec` needs a Python with loadable extensions (`uv`'s CPython has them; the python.org build for macOS does not). Without it, the server ranks the vectors with the standard library (`vector_backend: python`, about 110 ms per query with 1,480 vectors of 3,072 dimensions versus about 10 ms): same result except for exact ties at the `k` limit. `KNOWLEDGE_REQUIRE_SQLITE_VEC=1` turns that fallback into `E_SQLITE_VEC_UNAVAILABLE`; ring1 and the golden recording set it, and the plugin launches the server with `uvx --managed-python`.
-- No vault lives in this repo: each one has its own repository, and on the owner's machine their clones are under `~/Projects/Vaults/<slug>`, declared in `~/.config/knowledge/vaults.yaml`. A vault is content, not code. It is edited by human PR, never by the agent (D-11). The server only knows directories (`VAULT_PATH` or the `path` entries in `vaults.yaml`); whether a directory lives in a git repo is a hosting decision, not a server requirement: git only runs for a vault that declares `repo` in `vaults.yaml` or, with `VAULT_PATH`, `VAULT_REMOTE`.
+- No vault lives in this repo: each one has its own repository, and its clones live wherever each machine keeps them (for example `~/vaults/<slug>`), declared in `~/.config/knowledge/vaults.yaml`. The `guard-vault-write.sh` hook protects the clones under `KNOWLEDGE_VAULTS_ROOT`, whose default is `~/Projects/Vaults`: export it if your clones live elsewhere. A vault is content, not code. It is edited by human PR, never by the agent (D-11). The server only knows directories (`VAULT_PATH` or the `path` entries in `vaults.yaml`); whether a directory lives in a git repo is a hosting decision, not a server requirement: git only runs for a vault that declares `repo` in `vaults.yaml` or, with `VAULT_PATH`, `VAULT_REMOTE`.
 
 ## Verified commands
 
@@ -57,7 +57,7 @@ uv run pytest                # full suite (unit + tool + contract)
 KNOWLEDGE_REQUIRE_SQLITE_VEC=1 uv run pytest   # same, but fails if sqlite-vec does not load in this Python (this is how ring1 runs)
 uv run ruff check             # lint
 uv run lint-imports            # core/ext/http layer contracts from .importlinter (import-linter)
-uv build                       # sdist + wheel of cloudfrog-knowledge (src/knowledge only)
+uv build --out-dir "$(mktemp -d)"   # packaging check: sdist + wheel of cloudfrog-knowledge (src/knowledge only) in a temporary directory outside the repo; never commit dist/ and never upload a local build
 uv run cloudfrog-knowledge     # entry point ([project.scripts] -> knowledge.cli:main); with no subcommand it is equivalent to `serve`
 uv run knowledge --version     # the `knowledge` alias: same entry point; usage, --version and hints name the command that ran
 (cd npm && npm test)           # the npm wrapper (@cloudfrog/knowledge): node --test, no dependencies, no network
@@ -79,7 +79,7 @@ Pipelines and gates:
 
 - The pipeline gates (`.github/workflows/ring1.yml`) run on Linux on every pull request to `main` (lint and suite with coverage —`ruff`, `pytest` and the `node --test` of `npm/`—, `lint-imports`, gitleaks over the PR's commits, Semgrep CE and diff-coverage), on every push to `main` (the same ones except diff-coverage, plus the image built and tested on amd64) and by hand with `workflow_dispatch`; the details are in `README.md`, section "Tests and merge gates (ring 1)".
 - The weekly stale-documents report does not run here: each vault runs it in its own workflow, which fetches `scripts/weekly-stale-report.py` and `scripts/notify-stale-report.sh` from this repository.
-- `release-check.yml` runs on every `v*` tag and by hand (`gh workflow run release-check.yml --ref main`): coherent versions (`scripts/check-version.sh`, with the tag only if the ref is a tag), frozen goldens, the plugin with `claude plugin validate --strict`, sdist and wheel; no secrets and no environment, and its green is what is expected before the marketplace pull request on every release.
+- `release-check.yml` runs on every `v*` tag and by hand (`gh workflow run release-check.yml --ref main`): coherent versions (`scripts/check-version.sh`, with the tag only if the ref is a tag), frozen goldens, the plugin with `claude plugin validate --strict`, sdist and wheel; no secrets and no environment, and its green is what is expected before the marketplace pull request on every release. A local `uv build --out-dir <temporary dir outside the repo>` is fine as a packaging check, but `dist/` is never committed and a locally built artifact is never uploaded: every published sdist and wheel is built and published only by `publish.yml` on the runner, and `release-check.yml` checks them.
 - `publish.yml` runs on every `v*` tag and by hand (`dry_run` by default): a read-only job verifies versions, the `uv` checksums of the npm wrapper, the wheel and the two console scripts, and only the job with the `release` environment and `id-token: write` publishes to PyPI and npm through trusted publishing, skipping a registry only if that version already exists there; the first npm version is published by hand (`docs/runbooks/ci-ring1.md`, section 7).
 - Actions allows only GitHub-authored actions, pinned by SHA with their tag in a comment; ring1 reads no secret.
 - The `protect-main` ruleset requires the five checks that run on a PR (all except the image); bypass, minutes, rotation of a read-only deploy key and rollback are in `docs/runbooks/ci-ring1.md`.
@@ -158,7 +158,7 @@ If a tool is ever documented as broken, repairing it is the job of the `repair-m
 | Indexing bugfix | Direct (≤3 files); reproduce with `tests/fixtures/vault/`, never with the real vault | Indexer suite |
 | Vault change (content) | Human PR with the owner as reviewer (D-11) | Frontmatter validated + wikilinks resolved + Mermaid rendered |
 | Layer refactor | SDD + characterization; golden master of every goldens session, with no diff | `import-linter` + empty diff of responses |
-| Incident (MCP down or stale index) | Runbook + RDD High; `/health` first | Comment and transition on the D-06 allowlist |
+| Incident (MCP down or stale index) | Runbook + RDD High; `/health` first | Incident write-up on its tracking issue, with the `/health` output |
 
 ## Memory, knowledge and code graph
 
@@ -180,7 +180,7 @@ The `mem_*` tools arrive by two routes: the Claude Code plugin `memory@cloudfrog
 - This repo's code is indexed in graphify (`graphify-out/` already exists); `explain`/`affected` are reliable on Python.
 - This repo's `.mcp.json` declares two stdio servers.
   - `memory`: `${MEMORY_BIN:-memory} mcp --tools=agent,projects,workspace` with `env` `MEMORY_PROJECT=knowledge`, `MEMORY_VAULT_ROOT=${HOME}/.cloudfrog` and `MEMORY_PROJECTS_SYNC=1`; it does not pass `MEMORY_CLOUD_AUTOSYNC`, because sync with memory cloud is done only by the `memory serve` service (enabled with `memory cloud config --autosync on`), `memory mcp` ignores that variable and `memory cloud status` flags it as superfluous.
-  - `graphify`: `${GRAPHIFY_MCP_BIN:-/opt/homebrew/bin/graphify-mcp} ${CLAUDE_PROJECT_DIR:-.}/graphify-out/graph.json --transport stdio`.
+  - `graphify`: `${GRAPHIFY_MCP_BIN:-graphify-mcp} ${CLAUDE_PROJECT_DIR:-.}/graphify-out/graph.json --transport stdio`.
 - The knowledge server (this same server, deployed) is not in the `.mcp.json`: it is installed as a plugin from the `cloudfroghq` marketplace (`knowledge@cloudfroghq` over stdio, prefix `mcp__plugin_knowledge_knowledge__`, or `knowledge-remote@cloudfroghq` against an HTTP deployment, prefix `mcp__plugin_knowledge-remote_knowledge__`; see `docs/install.md`), or each person registers it in their Claude Code user configuration (`claude mcp get cloudfrog-knowledge`): user scope, http transport, URL `https://<deployment>/mcp` and an `Authorization: Bearer <token>` header that lives only in that local configuration, never in the repo.
 - The vault is **not** indexed in graphify: it is content, not code, and navigating it is exactly what this server's tools solve.
 
@@ -189,7 +189,7 @@ The `mem_*` tools arrive by two routes: the Claude Code plugin `memory@cloudfrog
 | Variable | What it points to | Default |
 |---|---|---|
 | `MEMORY_BIN` | The memory binary. | `memory`, resolved through `PATH` |
-| `GRAPHIFY_MCP_BIN` | The `graphify-mcp` binary. | `/opt/homebrew/bin/graphify-mcp` |
+| `GRAPHIFY_MCP_BIN` | The `graphify-mcp` binary. | `graphify-mcp`, resolved through `PATH` |
 
 How to check that they really resolve:
 
@@ -200,12 +200,12 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
   | "${MEMORY_BIN:-memory}" mcp --tools=agent,projects,workspace
 
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
-  | "${GRAPHIFY_MCP_BIN:-/opt/homebrew/bin/graphify-mcp}" graphify-out/graph.json --transport stdio
+  | "${GRAPHIFY_MCP_BIN:-graphify-mcp}" graphify-out/graph.json --transport stdio
 ```
 
 The memory server answers the handshake and returns 35 tools, the union of the three profiles that `.mcp.json` declares; a shorter or longer list means the profile is not the declared one. A `--help`, a `--version`, a `test -e` or a `command -v` **do not work** as a check: all four exit before the server is built, and a dangling symlink still exists as a directory entry, so all four pass and the process dies later with an opaque `ENOENT` or `ImportError`. The only valid proof is that `initialize` and `tools/list` answer.
 
-The default of `MEMORY_BIN` is a name that `PATH` resolves, not an absolute path. That is the difference from the dangling symlink: `PATH` either finds a binary that answers the handshake or finds nothing, whereas a fixed absolute path to a checkout that is no longer there turns "needs installing" into "the server is broken".
+The defaults of `MEMORY_BIN` and `GRAPHIFY_MCP_BIN` are names that `PATH` resolves, not absolute paths. That is the difference from the dangling symlink: `PATH` either finds a binary that answers the handshake or finds nothing, whereas a fixed absolute path to a checkout that is no longer there turns "needs installing" into "the server is broken".
 
 The graph path for `graphify-mcp` is **positional**, not a flag: `graphify-mcp <graph.json> --transport stdio`. `--graph` does not exist and the process dies while parsing arguments.
 
@@ -217,11 +217,11 @@ The hooks in `.claude/settings.json` are the opposite case: there `CLAUDE_PROJEC
 
 ## Deployments
 
-Each deployment is documented in its vault, under `Deploy/`: domain, application on the platform, keys by name, webhooks, verification and rollback. None lives here. `infra/compose.yml` is the generic compose file for every instance (`docs/runbooks/serve-multiple-vaults.md`); `infra/dokploy-compose.yml` is the one for a Dokploy deployment that has not migrated to it yet.
+Each deployment is documented in its vault, under `Deploy/`: domain, application on the platform, keys by name, webhooks, verification and rollback. None lives here. `infra/compose.yml` is the generic compose file for every instance (`docs/runbooks/serve-multiple-vaults.md`).
 
 ## Hard rules
 
-- VCS by remote: `bkt` for Bitbucket repos; `gh` for repos hosted on GitHub. Never `gh` against a Bitbucket remote.
+- VCS: this repository is hosted on GitHub; use `gh` for its pull requests, issues and API.
 - The vault is edited by human PR with the owner as reviewer; the agent proposes, never writes (D-11).
 - The ring 1 pipeline runs on Linux: macOS has already hidden a real case-insensitivity defect.
 - Commits in Conventional Commits, with no ticket prefix and no AI attribution.

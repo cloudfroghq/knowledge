@@ -85,4 +85,4 @@ The detail is in [`docs/runbooks/serve-multiple-vaults.md`](../docs/runbooks/ser
 - If you change the `Dockerfile` or `infra/`, `run.sh` rebuilds the image. To leave the lab without images: `docker image rm knowledge-lab-knowledge-acme knowledge-lab-knowledge-globex`.
 - The compose project name is fixed (`knowledge-lab`): a new `run.sh` replaces the instances brought up by another checkout.
 - The `init` scan reads the `origin` from git's config file (without launching `git` per repo; `include`, quotes, comments and other odd cases do go to `git`) and is shared among the vaults of a single run. With alice's 2,016 directories and 62 repos: ~60 ms of scanning and ~0.45 s of `init`; launching `git` per repo would cost ~910 ms and ~2.3 s. `check_clients.py` prints the measurement of each run.
-- The lab does not touch `infra/dokploy-compose.yml` nor any real vault.
+- The lab does not touch any real vault.

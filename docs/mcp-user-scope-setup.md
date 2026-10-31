@@ -6,14 +6,12 @@ service checkouts that link or copy them no longer declare shared MCP servers in
 `graphify`, because the path of its graph is relative to the checkout, and `memory`,
 because the tool profile and the project are decided per repository.
 
-Everything else —`cloudfrog-knowledge`, `mcp-atlassian`, `newrelic-community`—
-lives in Claude Code's user scope (`~/.claude.json`, `mcpServers` section),
-fed by environment variables. This avoids declaring the same server once per context
-and the scope conflict that appears when the same server name is defined in both
-project scope and user scope with different contents.
-
-`datadog-mcp` does not appear here: the user-scope instance already authenticates
-through OAuth against Datadog and needs no variables or API keys.
+Shared servers, such as `cloudfrog-knowledge` itself and any issue-tracker or
+observability server your team uses, live in Claude Code's user scope
+(`~/.claude.json`, `mcpServers` section), fed by environment variables. This
+avoids declaring the same server once per context and the scope conflict that
+appears when the same server name is defined in both project scope and user scope
+with different contents.
 
 ## Required environment variables
 
@@ -23,12 +21,12 @@ loaded from their shell configuration.
 
 | Variable | What it is for |
 |---|---|
-| `CD_KNOWLEDGE_URL` | URL of this server's MCP, used by the `cloudfrog-knowledge` server: `https://<deployment>/mcp`. Each deployment documents it in its vault, in `Deploy/`. |
-| `CD_KNOWLEDGE_TOKEN` | Bearer token for that same MCP: the deployment's `MCP_API_KEY` (read-only) or the personal bearer assigned to you. |
-| `ATLASSIAN_EMAIL` | Email of the Atlassian account used by `mcp-atlassian` (Jira and Confluence). |
-| `ATLASSIAN_API_TOKEN` | API token of that Atlassian account. |
-| `NEW_RELIC_API_KEY` | New Relic API key for `newrelic-community`. |
-| `NEW_RELIC_ACCOUNT_ID` | New Relic account id associated with that API key. |
+| `KNOWLEDGE_MCP_URL` | URL of this server's MCP, used by the `cloudfrog-knowledge` server: `https://<deployment>/mcp`. Each deployment documents it in its vault, in `Deploy/`. |
+| `KNOWLEDGE_MCP_TOKEN` | Bearer token for that same MCP: the deployment's `MCP_API_KEY` (read-only) or the personal bearer assigned to you. |
+
+The names are only the ones this page uses in `~/.claude.json`; the server
+itself never reads them. Add one variable per credential of any other server
+you declare next to it.
 
 ## Environment file template
 
@@ -39,12 +37,8 @@ Copy this to a file outside any repository (for example,
 ```fish
 # Variables consumed by the user-scope MCP servers.
 # Contains credentials: 600 permissions, outside any repository.
-set -gx CD_KNOWLEDGE_URL "https://YOUR-KNOWLEDGE-MCP-HOST/mcp"
-set -gx CD_KNOWLEDGE_TOKEN "YOUR_TOKEN_HERE"
-set -gx ATLASSIAN_EMAIL "your-email@yourcompany.com"
-set -gx ATLASSIAN_API_TOKEN "YOUR_ATLASSIAN_API_TOKEN_HERE"
-set -gx NEW_RELIC_API_KEY "YOUR_NEW_RELIC_API_KEY_HERE"
-set -gx NEW_RELIC_ACCOUNT_ID "YOUR_NEW_RELIC_ACCOUNT_ID_HERE"
+set -gx KNOWLEDGE_MCP_URL "https://YOUR-KNOWLEDGE-MCP-HOST/mcp"
+set -gx KNOWLEDGE_MCP_TOKEN "YOUR_TOKEN_HERE"
 ```
 
 And load it from `~/.config/fish/config.fish` (adapt the path and the shell if you
@@ -59,44 +53,22 @@ end
 ## Servers to declare at user scope
 
 In `~/.claude.json`, inside `mcpServers` (user scope: it applies in
-any repository and is not versioned with the project). Adjust `JIRA_URL` and
-`CONFLUENCE_URL` to your organization's real Atlassian domain.
-The `CONFLUENCE_URL` of `mcp-atlassian` ends in `/wiki`; the one for `cloudfrog-knowledge` (`sync_confluence`, `confluence export`) is the site root, without `/wiki`, and is not copied from here.
+any repository and is not versioned with the project):
 
 ```json
 {
   "cloudfrog-knowledge": {
     "type": "http",
-    "url": "${CD_KNOWLEDGE_URL}",
-    "headers": { "Authorization": "Bearer ${CD_KNOWLEDGE_TOKEN}" }
-  },
-  "mcp-atlassian": {
-    "type": "stdio",
-    "command": "uvx",
-    "args": ["--python=3.12", "mcp-atlassian"],
-    "env": {
-      "JIRA_URL": "https://YOUR-DOMAIN.atlassian.net",
-      "JIRA_USERNAME": "${ATLASSIAN_EMAIL}",
-      "JIRA_API_TOKEN": "${ATLASSIAN_API_TOKEN}",
-      "CONFLUENCE_URL": "https://YOUR-DOMAIN.atlassian.net/wiki",
-      "CONFLUENCE_USERNAME": "${ATLASSIAN_EMAIL}",
-      "CONFLUENCE_API_TOKEN": "${ATLASSIAN_API_TOKEN}"
-    }
-  },
-  "newrelic-community": {
-    "type": "stdio",
-    "command": "npx",
-    "args": ["-y", "@piekstras/newrelic-mcp-server"],
-    "env": {
-      "NEW_RELIC_API_KEY": "${NEW_RELIC_API_KEY}",
-      "NEW_RELIC_ACCOUNT_ID": "${NEW_RELIC_ACCOUNT_ID}"
-    }
+    "url": "${KNOWLEDGE_MCP_URL}",
+    "headers": { "Authorization": "Bearer ${KNOWLEDGE_MCP_TOKEN}" }
   }
 }
 ```
 
-The `--python=3.12` pin on `mcp-atlassian` is deliberate: always declare it, never
-a bare `uvx`.
+If you also declare an Atlassian MCP server for Jira and Confluence, note that its
+`CONFLUENCE_URL` usually ends in `/wiki`, while the one for `cloudfrog-knowledge`
+(`sync_confluence`, `confluence export`) is the site root, without `/wiki`: do not
+copy one into the other.
 
 ## `memory` stays per repository, with the `projects` profile
 

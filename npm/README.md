@@ -57,4 +57,4 @@ A wrapper failure before the CLI starts (`E_UV_DOWNLOAD_FAILED` without a networ
 
 ## License
 
-[PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0), a source-available license: see `LICENSE`, including its `Required Notice:` line.
+[MIT License](https://opensource.org/license/mit): see `LICENSE`.

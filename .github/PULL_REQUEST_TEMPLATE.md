@@ -43,6 +43,10 @@
 - [ ] `uv run lint-imports`
 - [ ] `(cd npm && npm test)`
 
+Optional local check (never commit `dist/` or upload a local build; only `publish.yml` publishes):
+
+- [ ] `uv build --out-dir "$(mktemp -d)"`
+
 ## Notes for reviewers
 
 <!-- Risk, rollback, follow-ups, anything non-obvious. No tokens, keys or private vault content. -->

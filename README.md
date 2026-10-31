@@ -4,14 +4,14 @@
 [![PyPI](https://img.shields.io/pypi/v/cloudfrog-knowledge)](https://pypi.org/project/cloudfrog-knowledge/)
 [![npm](https://img.shields.io/npm/v/@cloudfrog/knowledge)](https://www.npmjs.com/package/@cloudfrog/knowledge)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue)](.python-version)
-[![License: PolyForm Shield 1.0.0](https://img.shields.io/badge/license-PolyForm%20Shield%201.0.0-orange)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 > A project's curated knowledge (flows, runbooks, endpoints, business rules) answerable from Claude Code or any MCP client.
 > You edit the Obsidian vault, push, and the server reindexes itself.
 
 `cloudfrog-knowledge` is an [MCP](https://modelcontextprotocol.io) server that serves one or more Obsidian vaults through hybrid search, wiki-link graph navigation and structured metadata queries. It is a reusable knowledge base: no project is wired into the code, and the vaults it serves are decided by configuration (`KNOWLEDGE_VAULTS` or `VAULT_PATH`). It runs locally over stdio, or on a server where it is exposed to a team over HTTP with bearer authentication. It is meant for teams that keep architecture notes, flows, runbooks and API contracts in a vault, and want their coding agents to read the right section instead of re-deriving it from code.
 
-The source is available under the [PolyForm Shield License 1.0.0](#license). That is a source-available license, not an OSI-approved open-source license.
+It is open source under the [MIT License](#license).
 
 **What do you need?**
 
@@ -466,7 +466,7 @@ Restart Claude Code and you are done.
 The vault does not live in this repository: each organization has its own, in its own repository. Clone the one you are going to edit:
 
 ```bash
-git clone git@github.com:<org>/vault.git ~/Projects/Vaults/<slug>
+git clone git@github.com:<org>/vault.git ~/vaults/<slug>
 ```
 
 Open it in Obsidian, edit, and propose the change by PR with the vault owner as reviewer (D-11). When the PR lands on `main`, that repository's push webhook notifies the server, which pulls the changes and reindexes only what changed. A one-file commit costs about $0.0003 in embeddings, so edit without fear.
@@ -492,13 +492,11 @@ Each deployment is an instance of the same server with its own environment: its 
 - **memory-cloud** (profile `memory`): image `ghcr.io/horacioespinosa/memory`, tag in `MEMORY_IMAGE_TAG` (default `latest`) with `pull_policy: always`, no published ports. The GHCR package is private: pulling it requires a registry credential loaded in the platform.
 - **Postgres** (profile `memory`): internal, no exposed port.
 
-`infra/dokploy-compose.yml` is the Compose file of a Dokploy deployment that has not migrated to `infra/compose.yml` yet; it is documented in that deployment's vault.
-
 ### How it is wired
 
 In case it has to be recreated:
 
-1. **Source.** The platform builds this repository with `infra/compose.yml` (a GitHub connection to `cloudfroghq/knowledge`, branch `main`). Automatic deployment **does not deploy anything on its own** in Dokploy: the server does not register the webhook, so it must be created by hand in GitHub (step 4). If it is missing, pushes land in the repository and the server keeps running the old image, with no visible error.
+1. **Source.** The platform builds this repository with `infra/compose.yml` (a GitHub connection to `cloudfroghq/knowledge`, branch `main`). On a platform that deploys from a Git connection, automatic deployment **does not deploy anything on its own**: the server does not register the webhook, so it must be created by hand in GitHub (step 4). If it is missing, pushes land in the repository and the server keeps running the old image, with no visible error.
 2. **Vaults at runtime.** No vault lives in this repository. `KNOWLEDGE_VAULTS_YAML` carries a `vaults.yaml` with each instance's entries (a `repo` the entrypoint clones into `/data/vaults/<slug>`, or a folder mounted with `path`, for example on `/data/local`), and in single-vault mode `VAULT_REMOTE`, `VAULT_BRANCH` and `VAULT_PATH` (default `/data/vaults/default`). The clone needs a read-only deploy key (`GIT_DEPLOY_KEY_B64`, or one per vault, `<SLUG_UPPER>_GIT_DEPLOY_KEY_B64`). Review thresholds come from the vault's `vault.yaml`, so no `config.json` is mounted (`KNOWLEDGE_CONFIG_JSON` is not defined). If the volume already has a clone, startup repoints its remote, fetches and force-checks out the branch, so an old volume adopts the new remote with its content. After the clone, startup checks that `VAULT_PATH` exists and aborts naming the path, the remote and the branch if it is missing: a remote whose tree lacks that directory would otherwise die in the validation of `config.py` and, with `restart: unless-stopped`, crashloop behind a deploy that reports success.
 
    **Index.** It lives in the `knowledge-index` volume, in `KNOWLEDGE_INDEX_DIR=/data/index/<slug>` (`index.sqlite` with its sidecars `link_graph.json`, `usage_stats.json`, `index_meta.json` and `skipped_files.json`). Startup runs `migrate-index` and only then `serve`; `migrate-index` embeds nothing: it creates `index.sqlite` and, if it finds a Chroma index in `/data/chroma` (a volume mounted only as a source), copies its usage statistics and the graph's learned weights. The index fills on the first tool call or with the webhook. After a deploy, `docker volume ls` must list the `knowledge-index` volume and `/health` must report `index_version`.
@@ -640,11 +638,11 @@ What to check, in order:
 
 `memory cloud serve` does not retry: it opens the pool, pings with a five-second limit and, if that fails, prints that line and exits with code 1. The container comes back through the restart policy, so a log that repeats every few seconds is the same failure over and over, not different failures. The startup safety net is `depends_on` with `condition: service_healthy`.
 
-Why several Compose constructs behave differently on Dokploy: **Dokploy orchestrates with Docker Swarm**, which is why its troubleshooting docs talk about `docker service update --endpoint-mode dnsrr` and the `tasks.<app>` prefix, which are Swarm syntax. This stack, however, is deployed with `docker compose`, not `docker stack deploy`: the stack schema rejects `pull_policy` and the long form of `depends_on`, and ignores `build:`, so `infra/compose.yml` does not even parse that way. Two practical consequences: `restart`, `depends_on` with `condition: service_healthy` and `pull_policy` apply exactly as written; and the network, declared without `driver:`, is created as `bridge` (the same declaration under `docker stack deploy` would be `overlay`, which is precisely the reason not to pin the driver).
+Why several Compose constructs behave differently on a platform that **orchestrates with Docker Swarm**: its troubleshooting docs talk about `docker service update --endpoint-mode dnsrr` and the `tasks.<app>` prefix, which are Swarm syntax. This stack, however, is deployed with `docker compose`, not `docker stack deploy`: the stack schema rejects `pull_policy` and the long form of `depends_on`, and ignores `build:`, so `infra/compose.yml` does not even parse that way. Two practical consequences: `restart`, `depends_on` with `condition: service_healthy` and `pull_policy` apply exactly as written; and the network, declared without `driver:`, is created as `bridge` (the same declaration under `docker stack deploy` would be `overlay`, which is precisely the reason not to pin the driver).
 
 ### Local memory stack (`infra/`)
 
-`infra/compose.yml` with the `memory` profile starts, besides this MCP server (HTTP plus bearer), the authenticated replica of [memory](https://github.com/HoracioEspinosa/memory) (the fork with this team's cloud configuration, not the original project): `memory cloud serve` plus Postgres.
+`infra/compose.yml` with the `memory` profile starts, besides this MCP server (HTTP plus bearer), the authenticated replica of memory, the cloud build of the memory server named by the image below: `memory cloud serve` plus Postgres.
 
 ```bash
 cd infra
@@ -705,7 +703,7 @@ The workflow has `permissions: contents: read`, reads no secret and pins each ac
 
 The weekly stale-documents report does not run here: each vault runs it in its own workflow, which fetches `scripts/weekly-stale-report.py` and `scripts/notify-stale-report.sh` from this repository, pinned by commit or tag. It is never a gate and never writes in the vault.
 
-`.github/workflows/release-check.yml` verifies a release: it runs on every pushed `v*` tag and by hand. It reads no secrets or environments, and its token is read-only. It checks, in this order: that `pyproject.toml`, `plugin.json`, the `@v<version>` of `.mcp.json`, `npm/package.json` and `uv.lock` agree (`scripts/check-version.sh`, which also compares the tag when the ref is a tag; from a branch there is no tag and it compares only the files); that each `tests/golden/v*/SHA256SUMS` holds and that `test_contract_frozen.py`, `test_contract_golden.py` and `test_plugin_manifest.py` pass with `sqlite-vec` loaded; that `claude plugin validate --strict plugin/claude-code` passes (Node 22 and Claude Code `2.1.296`, pinned exactly); and that the sdist and the wheel build and carry only the package (`tests/test_sdist_contents.py`). The build runs on the runner; the prohibition of `uv build` is for the local machine. A dispatch uses the workflow of the ref you choose: `gh workflow run release-check.yml --ref main` works, a tag older than `release-check.yml` does not (it lacks the file). Whoever cuts the release waits for the tag run to go green before opening the marketplace pull request (`cloudfroghq/claude-plugins`).
+`.github/workflows/release-check.yml` verifies a release: it runs on every pushed `v*` tag and by hand. It reads no secrets or environments, and its token is read-only. It checks, in this order: that `pyproject.toml`, `plugin.json`, the `@v<version>` of `.mcp.json`, `npm/package.json` and `uv.lock` agree (`scripts/check-version.sh`, which also compares the tag when the ref is a tag; from a branch there is no tag and it compares only the files); that each `tests/golden/v*/SHA256SUMS` holds and that `test_contract_frozen.py`, `test_contract_golden.py` and `test_plugin_manifest.py` pass with `sqlite-vec` loaded; that `claude plugin validate --strict plugin/claude-code` passes (Node 22 and Claude Code `2.1.296`, pinned exactly); and that the sdist and the wheel build and carry only the package (`tests/test_sdist_contents.py`). Running `uv build --out-dir <temporary dir outside the repo>` locally is fine as a packaging check, but `dist/` is never committed and a locally built artifact is never uploaded: every published sdist and wheel is built and published only by `.github/workflows/publish.yml` on the runner, and this workflow checks them. A dispatch uses the workflow of the ref you choose: `gh workflow run release-check.yml --ref main` works, a tag older than `release-check.yml` does not (it lacks the file). Whoever cuts the release waits for the tag run to go green before opening the marketplace pull request (`cloudfroghq/claude-plugins`).
 
 `.github/workflows/publish.yml` publishes each `v*` tag to PyPI (`cloudfrog-knowledge`) and npm (`@cloudfrog/knowledge`). A first job, with no permission beyond reading the repository, compares the tag with every version, checks the `uv` checksums the npm package carries against the `uv` release and installs it with the package's own code, runs `node --test` and `npm pack --dry-run` in `npm/`, builds the sdist and the wheel, installs the wheel in a clean Python 3.12 environment, and requires `cloudfrog-knowledge --version` and `knowledge --version` to print the version. Only then does the second job, with the `release` environment and `id-token: write`, publish by trusted publishing (OIDC, no secrets): PyPI with `uv publish --trusted-publishing always` and npm with `npm publish --provenance --access public`. Each registry is skipped, with a warning, only if that exact version already exists; any other answer fails it. By hand, `gh workflow run publish.yml --ref main` builds and verifies without publishing. Operating it, the first manual `npm publish` and the trusted-publisher setup are in [`docs/runbooks/ci-ring1.md`](docs/runbooks/ci-ring1.md), section 7.
 
@@ -764,4 +762,4 @@ These scripts are for local stdio mode. On a server the index lives in the `know
 
 ## License
 
-The source is available under the [PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0) ([`LICENSE`](LICENSE)). You may use, modify and redistribute it for any purpose except providing a product that competes with the software, or with any product the licensor provides using it. Anyone who receives a copy also receives the terms and the `Required Notice:` line of `LICENSE`. PolyForm Shield is a source-available license; it is not an OSI-approved open-source license.
+Licensed under the [MIT License](LICENSE). You may use, copy, modify, merge, publish, distribute, sublicense and sell copies of the software, provided the copyright notice and the permission notice in [`LICENSE`](LICENSE) are included in all copies or substantial portions of it. Releases up to 0.9.0 were published under PolyForm Shield 1.0.0 and keep that license; see [`CHANGELOG.md`](CHANGELOG.md).
