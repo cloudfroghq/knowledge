@@ -162,7 +162,10 @@ class VectorStore(Protocol):
     """Documents, their chunks and their vectors.
 
     ``replace_file`` swaps everything stored for one document at once: a reader
-    sees the old version or the new one, never a mix. ``vectors`` is ``None``
+    sees the old version or the new one, never a mix. ``replace_files`` does
+    the same for a batch of ``(doc, chunks, vectors)`` items, in order, as one
+    step: it stores exactly what ``replace_file`` on each item would, and a
+    failure on any item leaves none of them written. ``vectors`` is ``None``
     for a provider without meaning; otherwise it holds one vector per chunk,
     and the first vector ever written fixes the dimension. ``knn`` returns at
     most ``k`` chunks by descending cosine similarity, ties by path and then
@@ -178,6 +181,10 @@ class VectorStore(Protocol):
 
     def replace_file(
         self, doc: DocRecord, chunks: Sequence[ChunkRecord], vectors: Sequence[Sequence[float]] | None
+    ) -> None: ...
+
+    def replace_files(
+        self, items: Iterable[tuple[DocRecord, Sequence[ChunkRecord], Sequence[Sequence[float]] | None]]
     ) -> None: ...
 
     def delete_files(self, file_paths: Iterable[str]) -> None: ...

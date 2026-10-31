@@ -524,16 +524,21 @@ class VaultIndexer:
         return vectors
 
     def _write(self, pending: list[tuple[DocRecord, list[ChunkRecord]]], existing: dict[str, str]) -> None:
-        """Embed the chunks of ``pending`` and replace each document in the store.
+        """Embed the chunks of ``pending`` and replace its documents in the store, as one batch.
 
         A document whose chunks cannot all be embedded is not written at all
         (and an older version of it is removed), so the store never holds a
         document without its vectors and the keyword ``idf`` counts only
         indexed files. Each failing chunk is reported in ``skipped_files``.
+
+        The batch is one ``replace_files`` call (one transaction in the SQLite
+        store). A store error inside it (a database error, a vector dimension
+        that disagrees with the stored one) rolls back every document of the
+        batch, where one write per document kept the earlier ones; the run
+        fails the same way, since that error is not caught here either.
         """
         if not self.embedder.semantic:
-            for doc, records in pending:
-                self._store.replace_file(doc, records, None)
+            self._store.replace_files([(doc, records, None) for doc, records in pending])
             return
         texts = [record.text for _, records in pending for record in records]
         try:
@@ -543,10 +548,12 @@ class VaultIndexer:
             for doc, records in pending:
                 self._write_one_by_one(doc, records, existing)
             return
+        batch: list[tuple[DocRecord, list[ChunkRecord], list[list[float]]]] = []
         start = 0
         for doc, records in pending:
-            self._store.replace_file(doc, records, vectors[start : start + len(records)])
+            batch.append((doc, records, vectors[start : start + len(records)]))
             start += len(records)
+        self._store.replace_files(batch)
         log.info("Wrote %d documents (%d chunks)", len(pending), len(texts))
 
     def _write_one_by_one(self, doc: DocRecord, records: list[ChunkRecord], existing: dict[str, str]) -> None:

@@ -213,6 +213,20 @@ class InMemoryVectorStore:
                 self._dim = dim
                 self._meta["dim"] = str(dim)
 
+    def replace_files(
+        self, items: Iterable[tuple[DocRecord, Sequence[ChunkRecord], Sequence[Sequence[float]] | None]]
+    ) -> None:
+        """``replace_file`` for each item in order; every item is checked first, so a failure writes none."""
+        batch = list(items)
+        with self._lock:
+            dim = self._dim
+            for _, chunks, vectors in batch:
+                found = _check_vectors(chunks, vectors, dim)
+                if vectors is not None and dim is None:
+                    dim = found
+            for doc, chunks, vectors in batch:
+                self.replace_file(doc, chunks, vectors)
+
     def delete_files(self, file_paths: Iterable[str]) -> None:
         with self._lock:
             for path in list(file_paths):
@@ -454,8 +468,9 @@ def _doc_where(flt: ChunkFilter | None, alias: str = "d") -> tuple[str, list[Any
 class SQLiteStore:
     """One vault's index in one SQLite file, safe to read from many threads while one writes.
 
-    Writes go through a single connection under a lock, one document per
-    ``BEGIN IMMEDIATE`` transaction; each reading thread has its own
+    Writes go through a single connection under a lock, one ``BEGIN IMMEDIATE``
+    transaction per call (one document, or one indexing batch through
+    :meth:`replace_files`); each reading thread has its own
     connection, and WAL lets it read the last committed state while a write is
     in flight.
     """
@@ -672,58 +687,90 @@ class SQLiteStore:
         marks = ",".join("?" * len(file_paths))
         if self._has_table(conn, "chunks_vec"):
             if self._vec:
-                conn.execute(
-                    f"DELETE FROM chunks_vec WHERE id IN (SELECT id FROM chunks WHERE file_path IN ({marks}))",
-                    list(file_paths),
-                )
+                # Delete the vectors by rowid: a ``vec0`` delete through
+                # ``id IN (SELECT …)`` walks the whole table once per call, which
+                # made a build quadratic in the number of chunks. A new document
+                # has no chunk yet and deletes nothing.
+                ids = [
+                    (row[0],)
+                    for row in conn.execute(f"SELECT id FROM chunks WHERE file_path IN ({marks})", list(file_paths))
+                ]
+                if ids:
+                    conn.executemany("DELETE FROM chunks_vec WHERE id = ?", ids)
             else:
                 conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('vec_dirty', '1')")
         conn.execute(f"DELETE FROM docs WHERE file_path IN ({marks})", list(file_paths))
 
+    def _replace_locked(
+        self,
+        conn: sqlite3.Connection,
+        doc: DocRecord,
+        chunks: Sequence[ChunkRecord],
+        vectors: Sequence[Sequence[float]] | None,
+    ) -> None:
+        """Replace one document inside the caller's transaction (the caller holds ``_lock``)."""
+        stored = self._dim(conn)
+        dim = _check_vectors(chunks, vectors, stored)
+        self._delete(conn, [doc.file_path])
+        conn.execute(
+            f"INSERT INTO docs({_DOC_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (doc.file_path, doc.doc_id, doc.title, doc.type, doc.service, doc.status, doc.owner,
+             doc.last_verified, doc.last_updated, doc.file_hash, doc.body),
+        )
+        conn.executemany(
+            "INSERT INTO doc_tags(file_path, pos, tag) VALUES (?, ?, ?)",
+            [(doc.file_path, pos, tag) for pos, tag in enumerate(doc.tags)],
+        )
+        ids: list[int] = []
+        for chunk in chunks:
+            cursor = conn.execute(
+                "INSERT INTO chunks(file_path, ord, chunk_key, title, section, overlap, text) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (doc.file_path, chunk.ord, f"{doc.doc_id}#{chunk.ord}", doc.title, chunk.section,
+                 chunk.overlap, chunk.text),
+            )
+            ids.append(int(cursor.lastrowid or 0))
+        if vectors is not None and chunks:
+            blobs = [_pack(vector) for vector in vectors]
+            conn.executemany(
+                "INSERT INTO chunk_vectors(id, embedding) VALUES (?, ?)", list(zip(ids, blobs, strict=True))
+            )
+            if stored is None and dim is not None:
+                conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('dim', ?)", (str(dim),))
+            if self._vec:
+                if not self._has_table(conn, "chunks_vec") and dim is not None:
+                    self._create_vec(conn, dim)
+                conn.executemany(
+                    "INSERT INTO chunks_vec(id, embedding, type, file_path) VALUES (?, ?, ?, ?)",
+                    [(i, blob, doc.type, doc.file_path) for i, blob in zip(ids, blobs, strict=True)],
+                )
+            else:
+                conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('vec_dirty', '1')")
+
     def replace_file(
         self, doc: DocRecord, chunks: Sequence[ChunkRecord], vectors: Sequence[Sequence[float]] | None
     ) -> None:
+        self.replace_files([(doc, chunks, vectors)])
+
+    def replace_files(
+        self, items: Iterable[tuple[DocRecord, Sequence[ChunkRecord], Sequence[Sequence[float]] | None]]
+    ) -> None:
+        """Replace each document of ``items`` in order, all of them in one transaction.
+
+        Each document runs the statements ``replace_file`` runs, in the same
+        order, so chunk ids (``INTEGER PRIMARY KEY``, the next free rowid) come
+        out the same as writing them one by one. A failure rolls back the whole
+        batch: readers see every document of it or none.
+        """
+        batch = list(items)
+        if not batch:
+            return
         with self._lock:
             conn = self._write_conn()
             conn.execute("BEGIN IMMEDIATE")
             try:
-                stored = self._dim(conn)
-                dim = _check_vectors(chunks, vectors, stored)
-                self._delete(conn, [doc.file_path])
-                conn.execute(
-                    f"INSERT INTO docs({_DOC_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (doc.file_path, doc.doc_id, doc.title, doc.type, doc.service, doc.status, doc.owner,
-                     doc.last_verified, doc.last_updated, doc.file_hash, doc.body),
-                )
-                conn.executemany(
-                    "INSERT INTO doc_tags(file_path, pos, tag) VALUES (?, ?, ?)",
-                    [(doc.file_path, pos, tag) for pos, tag in enumerate(doc.tags)],
-                )
-                ids: list[int] = []
-                for chunk in chunks:
-                    cursor = conn.execute(
-                        "INSERT INTO chunks(file_path, ord, chunk_key, title, section, overlap, text) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (doc.file_path, chunk.ord, f"{doc.doc_id}#{chunk.ord}", doc.title, chunk.section,
-                         chunk.overlap, chunk.text),
-                    )
-                    ids.append(int(cursor.lastrowid or 0))
-                if vectors is not None and chunks:
-                    blobs = [_pack(vector) for vector in vectors]
-                    conn.executemany(
-                        "INSERT INTO chunk_vectors(id, embedding) VALUES (?, ?)", list(zip(ids, blobs, strict=True))
-                    )
-                    if stored is None and dim is not None:
-                        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('dim', ?)", (str(dim),))
-                    if self._vec:
-                        if not self._has_table(conn, "chunks_vec") and dim is not None:
-                            self._create_vec(conn, dim)
-                        conn.executemany(
-                            "INSERT INTO chunks_vec(id, embedding, type, file_path) VALUES (?, ?, ?, ?)",
-                            [(i, blob, doc.type, doc.file_path) for i, blob in zip(ids, blobs, strict=True)],
-                        )
-                    else:
-                        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('vec_dirty', '1')")
+                for doc, chunks, vectors in batch:
+                    self._replace_locked(conn, doc, chunks, vectors)
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")
