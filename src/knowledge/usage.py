@@ -43,17 +43,30 @@ one client and its pairs are exact.
 
 State lives in a JSON overlay in the vault's index directory. If it is deleted
 or corrupted, everything regenerates from scratch — no data loss.
+
+Writing the overlay: every write reads the file once, merges the shared daily
+spend and the tool calls on disk, and replaces it atomically under the file
+lock. A tracker built with ``flush_interval_s`` (what the registry builds)
+writes on a daemon thread named ``usage-flush``, 20 hits or ``flush_interval_s``
+after the first pending one, so a request thread only copies the counters in
+memory and never waits on the file; ``close()`` (also run at interpreter exit)
+writes what is still pending. A hard crash loses at most one interval of
+counts. A paid judge call still writes at once, because the shared daily cap
+depends on it.
 """
 
 from __future__ import annotations
 
+import atexit
 import contextlib
+import copy
 import json
 import logging
 import math
 import os
 import threading
 import time
+import weakref
 from collections import deque
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
@@ -373,15 +386,51 @@ def rerank_summary(path: Path, *, day: str | None = None) -> dict[str, Any]:
     }
 
 
-class UsageTracker:
-    """Thread-safe retrieval counters with debounced JSON persistence."""
 
-    def __init__(self, path: Path) -> None:
+
+def _disk_spend(raw: Any) -> tuple[str, float]:
+    """``(day, usd_today)`` of a parsed usage file; ``("", 0.0)`` for one that could not be read."""
+    disk = _rerank_section(raw.get("rerank") if isinstance(raw, dict) else None)
+    return disk["day"], disk["usd_today"]
+
+
+class UsageTracker:
+    """Thread-safe retrieval counters with debounced JSON persistence.
+
+    Inline (``flush_interval_s=None``, the default): the call that records the
+    20th hit since the last write writes the file, on its own thread, after it
+    has let go of the tracker's lock. Background (``flush_interval_s`` seconds):
+    the recording call only signals a daemon thread named ``usage-flush``,
+    which writes once 20 hits are pending or ``flush_interval_s`` after the
+    first pending one, whichever comes first. :meth:`close` stops that thread
+    and writes what is left; it also runs at interpreter exit.
+
+    A write takes the in-memory state under ``_lock`` as copies, and reads,
+    encodes and replaces the file outside it, so recording never waits on file
+    I/O. Lock order: ``_flush_lock``, then the file lock, then ``_lock``; no
+    code takes the file lock or ``_flush_lock`` while holding ``_lock``.
+    """
+
+    def __init__(self, path: Path, *, flush_interval_s: float | None = None) -> None:
+        if flush_interval_s is not None and not flush_interval_s > 0:
+            raise ValueError(f"flush_interval_s must be positive, got {flush_interval_s!r}")
         self._path = path
         self._lock = threading.Lock()
+        # Signals the background writer; shares ``_lock``.
+        self._wake = threading.Condition(self._lock)
+        # One write of the file at a time in this process (the file lock alone
+        # does not serialize when ``fcntl`` is missing or the lock fails).
+        self._flush_lock = threading.Lock()
+        self._interval = flush_interval_s
+        self._flusher: threading.Thread | None = None
+        self._due = False
+        self._closed = False
         self._dirty_hits = 0
         # file_path -> {"uses": float, "last_used": iso}
         self._files: dict[str, dict] = {}
+        # The largest "uses" of ``_files``: grown by record_uses, rescanned
+        # only after a load or a decay. boost() reads it without the lock.
+        self._max_uses = 0.0
         # pair_key -> {week_key: count}
         self._pairs: dict[str, dict[str, int]] = {}
         # Newest-last (monotonic seconds, query, tool, result file paths).
@@ -397,6 +446,8 @@ class UsageTracker:
         self._calls_pending: dict[str, dict[str, dict[str, dict[str, dict[str, int]]]]] = {}
         self._decayed_at: float = time.time()
         self._load()
+        if flush_interval_s is not None:
+            _BACKGROUND.add(self)
 
     # -- recording -----------------------------------------------------------
 
@@ -408,10 +459,18 @@ class UsageTracker:
         with self._lock:
             for fp in file_paths:
                 entry = self._files.setdefault(fp, {"uses": 0.0})
-                entry["uses"] = float(entry.get("uses", 0.0)) + weight
+                uses = float(entry.get("uses", 0.0)) + weight
+                # The maximum first: a boost() between the two lines never
+                # sees a count above the maximum it divides by.
+                if uses > self._max_uses:
+                    self._max_uses = uses
+                entry["uses"] = uses
                 entry["last_used"] = now_iso
-            self._dirty_hits += len(file_paths)
-            self._maybe_flush_locked()
+            if weight < 0:
+                self._recompute_max()
+            due = self._add_hits_locked(len(file_paths))
+        if due:
+            self.flush_if_dirty()
 
     def record_pairs(self, file_paths: list[str]) -> None:
         """Bucket every pair in a result set into the current ISO week."""
@@ -423,8 +482,9 @@ class UsageTracker:
             for a, b in combinations(unique, 2):
                 buckets = self._pairs.setdefault(_pair_key(a, b), {})
                 buckets[week] = buckets.get(week, 0) + 1
-            self._dirty_hits += 1
-            self._maybe_flush_locked()
+            due = self._add_hits_locked(1)
+        if due:
+            self.flush_if_dirty()
 
     def record_query(self, query: str, file_paths: list[str], *, tool: str = "search") -> None:
         """Remember a search and the ranked file paths it returned.
@@ -466,9 +526,10 @@ class UsageTracker:
             self._query_opens.append(event)
             if len(self._query_opens) > _MAX_QUERY_OPENS:
                 del self._query_opens[: len(self._query_opens) - _MAX_QUERY_OPENS]
-            self._dirty_hits += 1
-            self._maybe_flush_locked()
-            return dict(event)
+            due = self._add_hits_locked(1)
+        if due:
+            self.flush_if_dirty()
+        return dict(event)
 
     def record_search(self, *, reranked: bool) -> None:
         """Count one ``search`` call in today's (UTC) bucket, and whether the judge reordered it.
@@ -502,8 +563,8 @@ class UsageTracker:
         ``input_tokens`` and ``usd`` are what the provider billed for the call
         (0 without one) and ``latency_ms`` how long the judge took, when it was
         called. A call that cost something is added to the spend of the day on
-        disk and written at once, so another process over the same vault reads
-        it before its own next call.
+        disk and written at once, on the calling thread, so another process
+        over the same vault reads it before its own next call.
         """
         day = utc_day()
         with self._lock:
@@ -521,14 +582,11 @@ class UsageTracker:
             if latency_ms is not None:
                 bucket = _latency_bucket(latency_ms)
                 section["latency_ms"][bucket] = section["latency_ms"].get(bucket, 0) + 1
-            if usd > 0:
-                with self._file_lock():
-                    section["usd_today"] = self._usd_today_locked(day) + usd
-                    section["day"] = day
-                    self._write_locked()
-            else:
-                self._dirty_hits += 1
-                self._maybe_flush_locked()
+            due = False if usd > 0 else self._add_hits_locked(1)
+        if usd > 0:
+            self._write(force=True, paid=(day, usd))
+        elif due:
+            self.flush_if_dirty()
 
     def record_call(self, tool: str, *, client: str | None, principal: str | None, error: bool) -> None:
         """Count one ``tools/call`` of ``tool`` in today's (UTC) bucket of ``client`` and ``principal``.
@@ -540,8 +598,9 @@ class UsageTracker:
         name = call_label(tool, max_len=_TOOL_LABEL_MAX)
         with self._lock:
             _add_call(self._calls_pending, day, name, call_label(client), call_label(principal), 1, 1 if error else 0)
-            self._dirty_hits += 1
-            self._maybe_flush_locked()
+            due = self._add_hits_locked(1)
+        if due:
+            self.flush_if_dirty()
 
     def pending_tool_calls(self) -> dict[str, Any]:
         """A copy of the tool calls this process counted and has not written yet."""
@@ -550,35 +609,20 @@ class UsageTracker:
 
     def rerank_usd_today(self) -> float:
         """US dollars the judge of this vault cost today (UTC), as every process recorded it on disk."""
+        day = utc_day()
+        raw = self._read_disk()
         with self._lock:
-            return self._usd_today_locked(utc_day())
+            return self._usd_today_locked(raw, day)
 
-    def _usd_today_locked(self, day: str) -> float:
+    def _usd_today_locked(self, raw: Any, day: str) -> float:
         own = self._rerank["usd_today"] if self._rerank["day"] == day else 0.0
-        disk_day, disk_usd = self._disk_spend()
+        disk_day, disk_usd = _disk_spend(raw)
         shared = disk_usd if disk_day == day else 0.0
         return max(own, shared)
 
-    def _disk_spend(self) -> tuple[str, float]:
-        """``(day, usd_today)`` as the usage file holds them; ``("", 0.0)`` when it cannot be read."""
-        try:
-            raw = json.loads(self._path.read_text())
-        except (OSError, ValueError):
-            return "", 0.0
-        disk = _rerank_section(raw.get("rerank") if isinstance(raw, dict) else None)
-        return disk["day"], disk["usd_today"]
-
-    def _disk_call_days(self) -> dict[str, dict[str, dict[str, dict[str, dict[str, int]]]]]:
-        """The ``tool_calls`` days the usage file holds; empty when it cannot be read."""
-        try:
-            raw = json.loads(self._path.read_text())
-        except (OSError, ValueError):
-            return {}
-        return _tool_call_days(raw.get("tool_calls") if isinstance(raw, dict) else None)
-
-    def _merge_disk_spend_locked(self) -> None:
+    def _merge_disk_spend_locked(self, raw: Any) -> None:
         """Keep the newest day's spend: the larger of this process's and the file's for the same day."""
-        disk_day, disk_usd = self._disk_spend()
+        disk_day, disk_usd = _disk_spend(raw)
         if not disk_day:
             return
         section = self._rerank
@@ -602,10 +646,14 @@ class UsageTracker:
         u = self.uses(file_path)
         if u <= 0:
             return 1.0
-        max_uses = max((float(e.get("uses", 0.0)) for e in self._files.values()), default=0.0)
+        max_uses = self._max_uses
         if max_uses <= 0:
             return 1.0
         return 1.0 + beta * math.log1p(u) / math.log1p(max_uses)
+
+    def _recompute_max(self) -> None:
+        """Rescan every used file for the largest count (after a load, a decay or a negative weight)."""
+        self._max_uses = max((float(e.get("uses", 0.0)) for e in self._files.values()), default=0.0)
 
     def co_occurrence(self, a: str, b: str) -> int:
         """Co-retrieval count for the pair within the recent window."""
@@ -633,18 +681,82 @@ class UsageTracker:
     # -- persistence ---------------------------------------------------------
 
     def flush(self) -> None:
-        with self._lock:
-            self._flush_locked()
+        """Write the file now, on the calling thread, whether or not anything is pending."""
+        self._write(force=True)
 
     def flush_if_dirty(self) -> None:
         """Write the file only when something was recorded since the last write."""
         with self._lock:
-            if self._dirty_hits or self._calls_pending:
-                self._flush_locked()
+            if not self._pending_locked():
+                return
+        self._write(force=False)
 
-    def _maybe_flush_locked(self) -> None:
+    def close(self, timeout: float | None = 10.0) -> None:
+        """Stop the background writer, if any, and write what is still pending.
+
+        Idempotent. A tracker keeps recording after it is closed, writing inline.
+        When the writer is still waiting on another process's file lock after
+        ``timeout`` seconds, this returns without the last write (logged).
+        """
+        with self._lock:
+            self._closed = True
+            self._interval = None
+            flusher, self._flusher = self._flusher, None
+            self._wake.notify_all()
+        _BACKGROUND.discard(self)
+        if flusher is not None and flusher is not threading.current_thread():
+            flusher.join(timeout)
+            if flusher.is_alive():
+                log.warning("usage: the writer of %s still waits for the file lock; closing without it", self._path)
+                return
+        self.flush_if_dirty()
+
+    def _pending_locked(self) -> bool:
+        return bool(self._dirty_hits or self._calls_pending)
+
+    def _add_hits_locked(self, hits: int) -> bool:
+        """Count ``hits`` more pending hits; ``True`` when the caller must write now (inline only)."""
+        self._dirty_hits += hits
+        if self._interval is None:
+            return self._dirty_hits >= _FLUSH_EVERY_HITS
+        if self._flusher is None:
+            self._flusher = threading.Thread(target=self._run_flusher, name="usage-flush", daemon=True)
+            self._flusher.start()
         if self._dirty_hits >= _FLUSH_EVERY_HITS:
-            self._flush_locked()
+            self._due = True
+            self._wake.notify()
+        elif self._dirty_hits == hits:  # the first pending hit starts the interval
+            self._wake.notify()
+        return False
+
+    def _run_flusher(self) -> None:
+        """The ``usage-flush`` thread: write once 20 hits are pending or an interval after the first one."""
+        while True:
+            with self._lock:
+                while not self._closed and not self._pending_locked():
+                    self._wake.wait()
+                if self._closed or self._interval is None:
+                    return
+                deadline = time.monotonic() + self._interval
+                while not self._closed and not self._due:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._wake.wait(remaining)
+                if self._closed:
+                    return  # close() writes what is left
+                self._due = False
+            try:
+                self.flush_if_dirty()
+            except Exception:
+                log.exception("usage: background flush of %s failed", self._path)
+
+    def _read_disk(self) -> Any:
+        """The parsed usage file; ``None`` when it cannot be read or parsed."""
+        try:
+            return json.loads(self._path.read_text())
+        except (OSError, ValueError):
+            return None
 
     def _load(self) -> None:
         try:
@@ -658,7 +770,9 @@ class UsageTracker:
             return
         except Exception:
             log.exception("usage: failed to load %s — starting fresh", self._path)
+            self._recompute_max()
             return
+        self._recompute_max()
         self._apply_decay()
 
     def _apply_decay(self) -> None:
@@ -672,6 +786,7 @@ class UsageTracker:
         self._files = {
             fp: e for fp, e in self._files.items() if float(e.get("uses", 0.0)) >= _MIN_USES_KEPT
         }
+        self._recompute_max()
         # prune pair buckets that fell out of the window
         recent = _recent_week_keys()
         for key in list(self._pairs):
@@ -709,35 +824,75 @@ class UsageTracker:
         finally:
             handle.close()
 
-    def _flush_locked(self) -> None:
-        with self._file_lock():
-            self._merge_disk_spend_locked()
-            self._write_locked()
+    def _write(self, *, force: bool, paid: tuple[str, float] | None = None) -> None:
+        """Read the file once, merge, and replace it; ``paid`` adds a judge call's cost to the day's spend.
 
-    def _write_locked(self) -> None:
-        """Serialise the state and replace the file atomically; the caller holds both locks."""
-        self._apply_decay()
-        payload = {
+        Under ``_flush_lock`` and the file lock. ``_lock`` is held only to merge
+        the spend, apply a due decay and copy the state.
+        """
+        with self._flush_lock, self._file_lock():
+            raw = self._read_disk()
+            with self._lock:
+                if not force and not self._pending_locked():
+                    return
+                if paid is None:
+                    self._merge_disk_spend_locked(raw)
+                else:
+                    day, usd = paid
+                    self._rerank["usd_today"] = self._usd_today_locked(raw, day) + usd
+                    self._rerank["day"] = day
+                self._apply_decay()
+                payload = self._snapshot_locked()
+                calls, self._calls_pending = self._calls_pending, {}
+                hits, self._dirty_hits = self._dirty_hits, 0
+            if not self._replace(payload, raw, calls):
+                with self._lock:
+                    newer, self._calls_pending = self._calls_pending, calls
+                    _merge_call_days(self._calls_pending, newer)
+                    self._dirty_hits += hits
+
+    def _snapshot_locked(self) -> dict[str, Any]:
+        """The persisted sections, as copies another thread may keep recording past."""
+        payload: dict[str, Any] = {
             "decayed_at": self._decayed_at,
-            "files": self._files,
-            "pairs": self._pairs,
-            "query_opens": self._query_opens,
+            "files": {fp: dict(entry) for fp, entry in self._files.items()},
+            "pairs": {key: dict(buckets) for key, buckets in self._pairs.items()},
+            "query_opens": list(self._query_opens),
         }
         if self._rerank != _fresh_rerank():
-            payload["rerank"] = self._rerank
-        calls = self._disk_call_days()
-        _merge_call_days(calls, self._calls_pending)
-        calls = _kept_call_days(calls, utc_day())
-        if calls:
-            payload["tool_calls"] = {"days": calls}
+            payload["rerank"] = copy.deepcopy(self._rerank)
+        return payload
+
+    def _replace(self, payload: dict[str, Any], raw: Any, calls: dict[str, Any]) -> bool:
+        """Add ``calls`` onto the tool calls of ``raw`` and replace the file atomically; ``False`` on failure."""
+        days = _tool_call_days(raw.get("tool_calls") if isinstance(raw, dict) else None)
+        _merge_call_days(days, calls)
+        days = _kept_call_days(days, utc_day())
+        if days:
+            payload["tool_calls"] = {"days": days}
         tmp = self._path.with_name(f"{self._path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(json.dumps(payload, ensure_ascii=False))
             os.replace(tmp, self._path)
-            self._dirty_hits = 0
-            self._calls_pending = {}
+            return True
         except Exception:
             log.exception("usage: failed to flush %s", self._path)
             with contextlib.suppress(OSError):
                 tmp.unlink()
+            return False
+
+
+#: Open trackers with a background writer; each is closed, writing what it has
+#: pending, when the interpreter exits.
+_BACKGROUND: weakref.WeakSet[UsageTracker] = weakref.WeakSet()
+
+
+@atexit.register
+def close_background_trackers() -> None:
+    """Close every tracker that still has a background writer (``atexit``)."""
+    for tracker in list(_BACKGROUND):
+        try:
+            tracker.close()
+        except Exception:
+            log.exception("usage: closing %s at exit failed", tracker._path)

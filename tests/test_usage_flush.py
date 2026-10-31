@@ -16,12 +16,16 @@ from __future__ import annotations
 import json
 import math
 import random
+import subprocess
+import sys
+import threading
 import time
 from itertools import combinations
 from pathlib import Path
 from typing import Any
 
 import pytest
+from perf_counters import file_opens
 
 from knowledge import usage
 from knowledge.usage import UsageTracker
@@ -213,3 +217,221 @@ def test_an_empty_or_unused_tracker_boosts_nothing(tmp_path: Path) -> None:
     assert [tracker.boost(fp) for fp in PATHS] == [1.0] * len(PATHS)
     tracker.record_uses([PATHS[0]])
     assert tracker.boost(PATHS[0]) == 1.1 and tracker.boost(PATHS[1]) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# The background writer writes the same file, off the recording thread
+# ---------------------------------------------------------------------------
+
+
+def _clockless(path: Path) -> dict[str, Any]:
+    """The parsed file without the fields that hold a timestamp."""
+    raw = json.loads(path.read_text())
+    raw.pop("decayed_at")
+    for entry in raw["files"].values():
+        entry.pop("last_used")
+    for event in raw["query_opens"]:
+        event.pop("at")
+    return raw
+
+
+def _wait_until(predicate: Any, *, seconds: float = 30.0) -> None:
+    """Synchronise with the writer thread; the bound only keeps a broken writer from hanging the suite."""
+    deadline = time.monotonic() + seconds
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("the usage-flush thread never got there")
+        time.sleep(0.01)
+
+
+@pytest.mark.parametrize("seed", [1, 7, 42])
+def test_a_background_tracker_writes_what_an_inline_one_writes(tmp_path: Path, seed: int) -> None:
+    inline = UsageTracker(tmp_path / "inline.json")
+    background = UsageTracker(tmp_path / "background.json", flush_interval_s=0.01)
+
+    model = drive(inline, seed)
+    assert drive(background, seed).uses == model.uses
+    inline.flush()
+    background.close()
+
+    assert_file_matches(tmp_path / "background.json", model)
+    assert _clockless(tmp_path / "background.json") == _clockless(tmp_path / "inline.json")
+    assert list(json.loads((tmp_path / "background.json").read_text())) == list(
+        json.loads((tmp_path / "inline.json").read_text())
+    )
+    for fp in PATHS:
+        assert background.boost(fp) == inline.boost(fp) == frozen_boost(model.uses, fp)
+
+
+def test_the_recording_thread_never_writes_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "usage_stats.json"
+    tracker = UsageTracker(path, flush_interval_s=3600)
+
+    with file_opens(tmp_path) as opens:
+        for n in range(45):
+            tracker.record_uses([PATHS[n % len(PATHS)]])
+        _wait_until(lambda: len(opens.writes("usage_stats.json.*.tmp")) >= 1)  # 20 hits wake the writer
+        recorder_writes = [t for t in opens.writes("*") if t != "usage-flush"]
+
+    assert recorder_writes == []
+    tracker.close()
+    assert sum(e["uses"] for e in json.loads(path.read_text())["files"].values()) == 45
+
+
+def test_a_few_hits_are_written_one_interval_later(tmp_path: Path) -> None:
+    path = tmp_path / "usage_stats.json"
+    tracker = UsageTracker(path, flush_interval_s=0.05)
+
+    with file_opens(tmp_path) as opens:
+        tracker.record_call("search", client="c", principal="stdio", error=False)
+        _wait_until(path.exists)
+
+    assert opens.writes("usage_stats.json.*.tmp") == ["usage-flush"]
+    assert tracker.pending_tool_calls() == {}
+    assert json.loads(path.read_text())["tool_calls"]["days"][usage.utc_day()]["search"]["c"]["stdio"]["calls"] == 1
+    tracker.close()
+
+
+def test_close_writes_what_is_pending_on_the_closing_thread_and_stops_the_writer(tmp_path: Path) -> None:
+    path = tmp_path / "usage_stats.json"
+    tracker = UsageTracker(path, flush_interval_s=3600)
+    tracker.record_uses([PATHS[0]], weight=2.0)
+    tracker.record_call("get_document", client="c", principal="stdio", error=False)
+    flusher = tracker._flusher
+    assert flusher is not None and flusher.name == "usage-flush" and flusher.daemon
+
+    with file_opens(tmp_path) as opens:
+        tracker.close()
+        tracker.close()  # idempotent: nothing pending, nothing written
+
+    assert opens.writes("usage_stats.json.*.tmp") == ["MainThread"]
+    assert not flusher.is_alive()
+    assert UsageTracker(path).uses(PATHS[0]) == 2.0
+
+    for _ in range(20):  # a closed tracker keeps counting, and writes inline again
+        tracker.record_uses([PATHS[1]])
+    assert UsageTracker(path).uses(PATHS[1]) == 20.0
+
+
+_EXIT_WITHOUT_CLOSE = """
+import sys
+from pathlib import Path
+from knowledge.usage import UsageTracker
+
+tracker = UsageTracker(Path(sys.argv[1]), flush_interval_s=3600)
+tracker.record_uses(["a.md", "b.md"], weight=2.0)
+tracker.record_call("search", client="c", principal="stdio", error=True)
+"""
+
+
+def test_the_pending_counts_are_written_at_interpreter_exit(tmp_path: Path) -> None:
+    path = tmp_path / "usage_stats.json"
+    done = subprocess.run([sys.executable, "-c", _EXIT_WITHOUT_CLOSE, str(path)], timeout=120, check=False)
+
+    assert done.returncode == 0
+    raw = json.loads(path.read_text())
+    assert {fp: e["uses"] for fp, e in raw["files"].items()} == {"a.md": 2.0, "b.md": 2.0}
+    assert raw["tool_calls"]["days"][usage.utc_day()]["search"]["c"]["stdio"] == {"calls": 1, "errors": 1}
+
+
+def test_a_paid_judge_call_is_written_at_once_by_its_own_thread(tmp_path: Path) -> None:
+    path = tmp_path / "usage_stats.json"
+    tracker = UsageTracker(path, flush_interval_s=3600)
+
+    with file_opens(tmp_path) as opens:
+        tracker.record_rerank(applied=True, reason=None, units=6, usd=0.25)
+
+    assert opens.writes("usage_stats.json.*.tmp") == ["MainThread"]
+    assert opens.reads("usage_stats.json") == 1
+    assert json.loads(path.read_text())["rerank"]["usd_today"] == pytest.approx(0.25)
+    assert UsageTracker(path).rerank_usd_today() == pytest.approx(0.25)
+    tracker.close()
+
+
+@pytest.mark.parametrize("interval", [None, 0.01])
+def test_a_failed_write_keeps_every_count_for_the_next_one(tmp_path: Path, interval: float | None) -> None:
+    blocker = tmp_path / "index"
+    blocker.write_text("a file where the index directory should be")
+    path = blocker / "usage_stats.json"
+    tracker = UsageTracker(path, flush_interval_s=interval)
+    for _ in range(25):
+        tracker.record_call("search", client="c", principal="stdio", error=False)
+    tracker.record_uses([PATHS[0]])
+    tracker.flush()  # fails: the parent is a file
+
+    assert tracker.pending_tool_calls()[usage.utc_day()]["search"]["c"]["stdio"]["calls"] == 25
+    blocker.unlink()
+    tracker.close()
+
+    raw = json.loads(path.read_text())
+    assert raw["tool_calls"]["days"][usage.utc_day()]["search"]["c"]["stdio"]["calls"] == 25
+    assert raw["files"][PATHS[0]]["uses"] == 1.0
+
+
+def test_concurrent_recorders_lose_no_count(tmp_path: Path) -> None:
+    path = tmp_path / "usage_stats.json"
+    tracker = UsageTracker(path, flush_interval_s=0.005)
+
+    def work(n: int) -> None:
+        for i in range(300):
+            tracker.record_uses([PATHS[(n + i) % len(PATHS)]])
+            tracker.record_call(TOOLS[i % len(TOOLS)], client=CLIENTS[n % 2], principal="stdio", error=False)
+
+    threads = [threading.Thread(target=work, args=(n,)) for n in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    tracker.close()
+
+    raw = json.loads(path.read_text())
+    assert sum(e["uses"] for e in raw["files"].values()) == 6 * 300
+    day = raw["tool_calls"]["days"][usage.utc_day()]
+    assert sum(leaf["stdio"]["calls"] for clients in day.values() for leaf in clients.values()) == 6 * 300
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+_HOLD_LOCK = """
+import fcntl, sys
+with open(sys.argv[1], "a") as handle:
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    print("locked", flush=True)
+    sys.stdin.read()
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fcntl locks are POSIX")
+def test_recording_never_waits_for_another_process_holding_the_file_lock(tmp_path: Path) -> None:
+    """The writer waits on the lock and the recorders go on; the holder lets go only when told."""
+    path = tmp_path / "usage_stats.json"
+    tracker = UsageTracker(path, flush_interval_s=0.01)
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _HOLD_LOCK, str(path) + ".lock"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None and holder.stdout.readline().strip() == "locked"
+        tracker.record_uses([PATHS[0]])
+        _wait_until(tracker._flush_lock.locked)  # the writer now waits on the file lock
+        recorder = threading.Thread(target=lambda: [tracker.record_uses([PATHS[1]]) for _ in range(60)])
+        recorder.start()
+        recorder.join(timeout=60)
+        assert not recorder.is_alive(), "recording waited for the file lock"
+        assert tracker.uses(PATHS[1]) == 60.0
+        assert not path.exists()
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.close()
+        holder.wait(timeout=60)
+    tracker.close()
+
+    uses = {fp: e["uses"] for fp, e in json.loads(path.read_text())["files"].items()}
+    assert uses == {PATHS[0]: 1.0, PATHS[1]: 60.0}
+
+
+def test_flush_interval_must_be_positive(tmp_path: Path) -> None:
+    for bad in (0, -1.0):
+        with pytest.raises(ValueError, match="flush_interval_s"):
+            UsageTracker(tmp_path / "usage_stats.json", flush_interval_s=bad)
