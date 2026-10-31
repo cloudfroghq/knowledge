@@ -28,7 +28,7 @@ from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
-from knowledge import contexts, contract, extensions, principals, repos, server, settings, stores, usage
+from knowledge import contexts, contract, extensions, principals, repos, settings, stores, usage
 from knowledge.errors import (
     E_ARGUMENT_CONFLICT,
     E_CONTEXTS_CHECKOUT_INVALID,
@@ -349,12 +349,23 @@ def _environment(transport: str | None, vaults: str | None, profile: str | None 
 
 
 def _serve(transport: str | None, vaults: str | None, profile: str | None = None) -> int:
+    # Imported here, not at the top: the server pulls in the MCP SDK, and every
+    # other subcommand (`doctor --brief` runs on each SessionStart) never needs it.
+    from knowledge import server
+
     env = _environment(transport, vaults, profile)
     try:
         server.serve(settings.load_settings(env, project_root=PROJECT_ROOT))
     except KnowledgeConfigError as exc:
         return _fail(exc)
     return 0
+
+
+def _load_extension(name: str) -> Any:
+    """The module of extension ``name``, loaded through the server (the only module that imports one by name)."""
+    from knowledge import server
+
+    return server.load_extension(name)
 
 
 def _eval(rest: Sequence[str]) -> int:
@@ -1257,7 +1268,7 @@ def _confluence_export(args: argparse.Namespace) -> int:
             if args.out
             else loaded.knowledge_home / spec.slug / "confluence-export"
         )
-        report = server.load_extension("confluence").export(
+        report = _load_extension("confluence").export(
             out,
             vault_path=spec.require_path(),
             served_vaults=[s.path for s in loaded.vaults if s.path is not None],
@@ -1314,7 +1325,7 @@ def _memory_bridge(args: argparse.Namespace) -> int:
     """
     try:
         env, loaded, spec = _bridge_vault(args)
-        bridge = server.load_extension("memory-bridge")
+        bridge = _load_extension("memory-bridge")
         project = spec.memory_project or ""
         if args.bridge_command == "sync":
             report = bridge.sync_vault(spec, bridge.writer_for(loaded.memory), card=args.card)
@@ -1369,7 +1380,7 @@ def _jira(args: argparse.Namespace) -> int:
     env = _environment(None, args.vaults)
     try:
         loaded = settings.load_settings(env, project_root=PROJECT_ROOT)
-        jira = server.load_extension("jira")
+        jira = _load_extension("jira")
         spec = loaded.vault(args.vault) if args.vault else loaded.default_vault()
         bound = {} if args.max_issues is None else {"max_issues": args.max_issues}
         report = jira.sync(spec, env=env, memory=loaded.memory, dry_run=args.dry_run, since=args.since, **bound)
@@ -1388,7 +1399,7 @@ def _jira_auto(vaults: str | None) -> int:
     try:
         env = _environment(None, vaults)
         loaded = settings.load_settings(env, project_root=PROJECT_ROOT)
-        rows = server.load_extension("jira").auto(loaded, env)
+        rows = _load_extension("jira").auto(loaded, env)
     except Exception as exc:  # noqa: BLE001 - the session hook's run never fails the session
         logging.getLogger(__name__).warning("jira sync --auto did not run: %s", type(exc).__name__)
         return 0
