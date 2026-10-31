@@ -133,12 +133,12 @@ python -m benchmarks info                          # machine and checkout metada
 
 | Counter | How | Example fence (today) |
 |---|---|---|
-| SQL statements, writes, commits | SQLite trace callback on every connection of the store (`SQLiteStore.observe`) | `search` issues at most 15 statements; a first index at most 60 commits |
-| Rows handed to Python, rows carrying a column | `row_factory` on the same connections | `search` on an unselective query fetches at most 131 rows, 13 of them with `docs.body` |
+| SQL statements, writes, commits | SQLite trace callback on every connection of the store (`SQLiteStore.observe`) | `search` issues at most 15 statements; a first index at most 5 commits |
+| Rows handed to Python, rows carrying a column | `row_factory` on the same connections | `search` on an unselective query fetches at most 131 rows, none of them with `docs.body` |
 | Markdown files opened | PEP 578 audit hook on `open` | `search` opens at most 5 files; a no-op reindex at most 2 per document |
 | YAML documents parsed | `sys.monitoring` on `BaseConstructor.get_single_data` | a no-op reindex parses at most 60 |
-| Usage file reads and writes | The same audit hook | a flush reads `usage_stats.json` at most twice |
-| `knowledge.*` modules after `--version` and `doctor --brief` | A fresh interpreter | the 27 modules that load today, and no extension module |
+| Usage file reads and writes | The same audit hook | a flush reads `usage_stats.json` once |
+| `knowledge.*` modules after `--version` and `doctor --brief` | A fresh interpreter | 15 modules after `--version` and 22 after `doctor --brief`, and no extension module |
 
 Nothing is patched and nothing reads a clock, so the numbers are the same on a laptop and on the Linux pipeline. The test needs `sqlite-vec` (it fails when `KNOWLEDGE_REQUIRE_SQLITE_VEC=1` and the extension does not load, and skips otherwise: the stdlib fallback issues different statements). The file takes about 3 seconds.
 
@@ -146,16 +146,15 @@ These limits are today's values, not targets. A faster implementation passes the
 
 ### Tightening a budget
 
-Each limit that a roadmap item is expected to lower carries a `# TIGHTEN (<item>)` comment at the assertion, and the module docstring lists them by item. The change that lowers the work lowers the limit in the same commit, to the new measured value; that is what keeps a gain from eroding. Streams add their own, tighter files (`tests/test_perf_budget_*.py`); the integrator tightens this one after merging.
+Each limit that a roadmap item is expected to lower carries a `# TIGHTEN (<item>)` comment at the assertion, and the module docstring lists them by item. The change that lowers the work lowers the limit in the same commit, to the new measured value; that is what keeps a gain from eroding. Streams add their own, tighter files (`tests/test_perf_budget_*.py`); the phase 1 changes lowered the limits listed in the module docstring, and the ones below are still to drop.
 
 | Item | Budgets that should drop |
 |---|---|
-| 1.3 / 1.4 (index) | No-op reindex: YAML parses 60 to 0, Markdown opens 120 to 60. First index: commits 60 to about 2, `DELETE FROM chunks_vec` 59 to 0. One changed file: opens and parses fall with the vault |
 | 2.1 (keyword path) | Rows fetched by the lexical statement fall from every matching chunk to about `k`; `search`, `context_pack` and `search_deep` row counts follow |
-| 1.7a / 1.7b (`with_body`) | Rows carrying `docs.body` in `search`, `context_pack`, `search_deep` and `search_by_metadata` go to 0 |
-| 1.4 (section selector) | Markdown opens per `search` and `get_document` fall (5 to 0, 2 to 1) |
-| 1.5 / 0.3 (usage) | A flush reads the file once (2 to 1), and no longer runs on the calling thread |
-| 1.2 (CLI) | `--version` and `doctor --brief` no longer import `knowledge.server`: remove it, and what only it pulls in, from `STARTUP_MODULES` |
+| 2.2 (incremental reindex) | No-op reindex: YAML parses 60 to 0, Markdown opens 120 to 60. One changed file: opens and parses fall with the vault |
+| 2.3 (`search_deep`) | The hop pass re-ranks fewer rows |
+
+Phase 1 already lowered the first-index commits (60 to 5), the `DELETE FROM chunks_vec` on a first index (59 to 0), the rows carrying `docs.body` (to 0), the usage-file reads per flush (2 to 1) and the modules loaded by `--version` and `doctor --brief` (27 to 15 and 22). The Markdown opens of `search` and `get_document` have no roadmap item yet.
 
 A budget that must go up is a regression to explain in the change that raises it, not an inconvenience to route around.
 
