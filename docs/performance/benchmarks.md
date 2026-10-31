@@ -99,6 +99,8 @@ uv run python -m benchmarks compare "$HARNESS/.data/bench/base/results.json" "$H
 
 Use absolute `--out` paths: `--directory` changes the working directory. A base taken with `git archive` has no git metadata, so its `commit` is `null`: pass `--label` to name it (a `git worktree` checkout records the commit). `compare` prints a table of base and head p50 and p95, the relative change, and flags a p50 change beyond `--threshold` (default 15 %) as `faster` or `SLOWER`. It warns when the two files come from different machines. Scenarios present in only one file are listed, not compared.
 
+Both sides must run on the same interpreter and the same SQLite. A fresh base checkout gets its own `.venv` on its first `uv run`, and `uv` may pick a different Python for it than the head's `.venv` uses (for example a `uv`-managed CPython with a newer SQLite against a system CPython): every Python-heavy scenario then differs by the interpreter, not by the change. Create the base environment with the head's interpreter first, `uv sync --directory "$BASE" --frozen --all-groups --python "$(uv run python -c 'import sys; print(sys._base_executable)')"`, and check that `meta.python` and `meta.sqlite` agree in both `results.json` files: `compare` does not check them.
+
 Rules for a credible comparison:
 
 1. Same machine, quiet (no other build or benchmark running; `loadavg_start` and `loadavg_end` are in the summary), same Python and `sqlite-vec`.

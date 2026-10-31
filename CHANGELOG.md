@@ -18,14 +18,33 @@ Release dates come from the contract changelog and the release commit. Detail fo
 
 ## [Unreleased]
 
+Contract unchanged at 2.0.0: every tool response is byte-identical (the frozen goldens and the tool inventory do not change).
+
+### Performance
+
+- Index builds write each embedding batch in one transaction and delete vectors by id, only for documents that had any: about 2.8× faster full builds at 5,000 documents (18.6 → 6.6 s on the reference VM), with an identical index.
+- The keyword `idf` of `search`, `search_deep` and `context_pack` comes from a vocabulary of whitespace runs, memoized per term: about 35 → 0.3 ms per query at 5,000 documents, and about 18 MB less memory held between reindexes, with the same values. The first search after a start or a reindex pays a one-time build of that vocabulary (about 0.75 s at 5,000 documents).
+- Usage counts are written by a background thread at most every 2 seconds, from one read of `usage_stats.json` per write, instead of on the request thread every 20 events: the 30–150 ms stalls this caused in `search` and `get_document` with a large usage history are gone.
+- Learned link weights are saved on a background worker, as compact JSON, instead of on the request thread.
+- `search`, `search_deep`, `search_by_metadata` and `get_stale_docs` read documents without their bodies where none is used.
+- Every index connection maps the file with `PRAGMA mmap_size` (256 MiB): about 10–20 % faster lexical and vector reads on a 5,000-document index. Mapped pages count in the process's RSS (file-backed and reclaimable; 160 → 437 MiB after the benchmark's tool mix at 5,000 documents), and an I/O error on a mapped page ends the process with SIGBUS instead of an error.
+- The CLI imports the server only in the subcommands that serve: `--version`, `doctor`, `doctor --brief`, `init` and `vault-lint` start about 0.6 s faster (`doctor --brief` about 790 → 160 ms here), so does the plugin's `SessionStart` hook.
+- The Claude Code plugin launches the PyPI release instead of resolving a git tag: about 0.45 s less per warm start of the server and of the hook.
+
+### Added
+
+- `doctor --shape`: aggregate size distributions of the default vault (documents, body sizes, chunks, sections and links per document, counts per contract `type`, document-frequency percentiles of the recorded query terms), numbers only, for calibrating the benchmarks.
+- A per-tool duration histogram in `usage_stats.json` (`tool_latency`, fixed buckets, kept 120 days, no arguments), and `tool_calls.latency_ms` (calls, p50 and p95 per tool) in `doctor` once some call was timed. A binary older than this release drops the section when it rewrites the file.
+- A benchmark harness (`python -m benchmarks run|compare|info`, `docs/performance/benchmarks.md`) and deterministic work-budget tests (SQL statements and rows, file opens, YAML parses; no clock).
+- Community files: `CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md`, this changelog, GitHub issue and pull request templates, and `.editorconfig`.
+
 ### Changed
 
 - The project is relicensed under the MIT License starting with the next release. Releases up to 0.9.0 remain under PolyForm Shield 1.0.0.
 - Project documentation migrated to English (README, guides, runbooks and contributor files). Documentation only, plus the tool-inventory generator (`scripts/tool_inventory.py`), whose prose is now English, and the tests that assert on documentation headings; no tool contract, response or package behavior changes.
-
-### Added
-
-- Community files: `CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md`, this changelog, GitHub issue and pull request templates, and `.editorconfig`.
+- The plugin's `.mcp.json` and `SessionStart` hook launch `uvx --managed-python --python 3.12 --from cloudfrog-knowledge==<version>` (PyPI) instead of `--from git+https://github.com/cloudfroghq/knowledge.git@v<version>`; a warm start needs no network. Release order: the marketplace pull request for a plugin version waits until `publish.yml` has published that version to PyPI, or the plugin fails to start (`docs/runbooks/ci-ring1.md`, section 6). It takes effect with the first plugin version released after 0.9.0.
+- A store error inside an embedding batch now rolls back the whole batch, where before the earlier documents of the batch stayed written. The reindex fails with the same error either way and reports no file; the next reindex writes the documents the failed run did not.
+- Usage counts: a process killed hard can lose up to about 2 seconds of counts (before, up to 19 events). `link_graph.json` is written as compact JSON (still read in either form).
 
 ## [0.9.0] - 2026-10-30
 

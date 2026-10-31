@@ -1,6 +1,6 @@
 # Performance improvement plan
 
-Status: proposal. Baseline measured on 2026-10-31 at commit `ff514e7` (`cloudfrog-knowledge` 0.9.0, contract 2.0.0).
+Status: Phases 0 and 1 delivered except 0.5 (deferred) and 1.9 (dropped); see [Status of Phases 0 and 1](#status-of-phases-0-and-1). Phases 2 and 3 are still proposals. Baseline measured on 2026-10-31 at commit `ff514e7` (`cloudfrog-knowledge` 0.9.0, contract 2.0.0); the sections after the status are the original proposal, unchanged.
 Scope: the MCP server in `src/knowledge`, its CLI and the Claude Code plugin launcher. Vault content is out of scope.
 
 ## Executive summary
@@ -16,6 +16,42 @@ The server is fast on the fixture vault: `search` takes about 3 ms in process an
 Together, the measured category A items take the 5,000-document `search` from 122 ms to an estimated 35 ms p50. Every item in Phases 1 and 2 is category **A**: the output stays byte-identical, the goldens stay unchanged, and there is no contract bump. Each one is checked by the frozen goldens plus a differential test against the current implementation. Three levers can give large further gains: OpenAI `dimensions`, vector quantization, and narrower prefix matching. All three change scores, so they are category **B** and grouped in Phase 3 behind the retrieval evaluation harness.
 
 Proposed SLOs for a 5,000-document vault on the reference runner (in-process tool time, provider network excluded): `search` **p50 ≤ 35 ms** after Phases 1–2, which the measured prototypes support; **p95 ≤ 60 ms** on a calibrated query set, which on today's unselective synthetic queries needs Phase 3.3, because FTS5 `bm25()` alone has a 95 ms p95 there; `get_document` **p99 ≤ 5 ms**; `context_pack` **p95 ≤ 80 ms**; `search_deep` **p95 ≤ 150 ms**; launcher overhead **≤ 150 ms**; `doctor --brief` **≤ 300 ms**; no-op reindex **≤ 600 ms**; usage flush **≤ 5 ms and never on a request thread**.
+
+## Status of Phases 0 and 1
+
+Every delivered item is category **A**: the frozen goldens (`tests/golden/v2.0.0/`, all six sessions) and `docs/tools/inventory.md` are unchanged, and the contract stays at 2.0.0. Commits are those of the `perf/phase-0-1` branch. Counts are exact (the work-budget tests); times come from the `benchmarks/` harness, base `a89cd5e` against the branch tip on the same 4 vCPU VM and the same interpreter (CPython 3.12.3, SQLite 3.45.1, `sqlite-vec` 0.1.9), bag-of-words, generated vaults of 500 and 5,000 documents (seed 7; 1,370 and 14,364 chunks), 200 calls per scenario. Wall clock on this VM is good to about 10–15 %.
+
+| # | Status | Commits | Measured result |
+|---|---|---|---|
+| 0.1 | Done | `ee44a08`, `e1dad64` | `python -m benchmarks run\|compare\|info`; pyperf only through `uv run --with pyperf==2.10.0`, never in `uv.lock`. No `make bench` target: `uv run python -m benchmarks` is the entry point. How to run it: [`benchmarks.md`](benchmarks.md). |
+| 0.2 | Done | `4eeedc2`, `f163991`, `aa72ce8`, `75205a7` | A read-only observer hook on `SQLiteStore` (no patching), `tests/perf_counters.py`, the generator `tests/synthetic_vault.py` and `tests/test_perf_budgets.py`, lowered after Phase 1 to the counts below; each stream adds `tests/test_perf_budget_{store,request,cli}.py`. |
+| 0.3 | Done | `29acb42` | `tool_latency` section in `usage_stats.json` (fixed buckets 1 ms to 5 s, 120 days, no arguments); `doctor` reports `tool_calls.latency_ms` (calls, p50, p95 per tool) once a call was timed. |
+| 0.4 | Done | `9d028ea` | `doctor --shape`: aggregate numbers only, index opened immutable, a sentinel test proves no path, title, tag, heading or query term leaves. `Shape.from_export` consumes it. |
+| 0.5 | Deferred | — | No workflow added; to be decided once the harness has a history. |
+| 1.1 | Done | `dae2f2b` | `--from cloudfrog-knowledge==<version>`. Warm `uvx … python -c pass`: 536 → 92 ms (median of 10); cold 10.0 → 3.7 s (one sample). Release order: the marketplace PR waits for `publish.yml` to publish the version to PyPI ([`ci-ring1.md`](../runbooks/ci-ring1.md), section 6). Takes effect with the first plugin release after 0.9.0. |
+| 1.2 | Done | `32bae86` | `doctor --brief` 812 → 185 ms, `import knowledge.cli` 594 → 116 ms (harness p50); `--version` imports 15 `knowledge` modules instead of 27, none of `server`, `mcp`, `starlette`, `uvicorn`. |
+| 1.3 | Done | `15b6d18`, `7e5212c`, `e618c4b` | Full build at 5,000 docs 18.6 → 6.6 s (2.8×), at 500 docs 981 → 645 ms; commits of a first build of 500 docs 500 → 41, subselect vec0 deletes 499 → 0; the index is identical row by row. A store error inside a batch now rolls back the whole batch (the run fails as before and reports no file; the next run writes it). |
+| 1.4 | Done | `4ca5dd6`, `1c977a4` | `_query_idf` at 5,000 docs about 35 → 0.3 ms cold and about 0 warm; memory held between reindexes 24.9 → 6.9 MB; values equal with `==` on 5,000+ terms per corpus. Cost: the vocabulary is built by the first search after each reindex or start (one-time, about 0.06 → 0.75 s at 5,000 docs; first `search` 447 → 831 ms there). |
+| 1.5 | Done | `e09f38f`, `a9d4d3e`, `d18bb34` | One read of `usage_stats.json` per write (2 → 1); the registry's trackers write on a `usage-flush` thread every 2 s, never on a request thread (155 → 0 request-thread writes over 700 tool calls); `get_document` p95 21.5 → 1.1 ms (500 docs), 3.1 → 1.6 ms (5,000). A hard crash may lose about 2 s of counts. |
+| 1.6 | Done | `10ee3fc`, `8fb3a57` | Learned weights saved on a single `graph-save` worker, coalesced per runtime; `link_graph.json` compact (153 → 121 KB on 500 docs). |
+| 1.7 | Done | `72caeed` (store), `67b5c49`, `7a2f00b` (call sites) | `search`, `search_deep`, `context_pack` (through `search`), `search_by_metadata` and `get_stale_docs` read no `docs.body` (rows carrying `body` in one `search_deep` 63 → 0, in one `search_by_metadata(type=runbook)` 10 → 0). |
+| 1.8 | Done | `0f861c7` | `PRAGMA mmap_size` 256 MiB on every connection. Interleaved A/B (40 paired repetitions): lexical −18 to −22 % on the 85 MB index, KNN −20 % on a 438 MB 3,072-dimension index. Cost, documented at `MMAP_SIZE`: SIGBUS instead of `sqlite3.Error` on an I/O error of a mapped page, and mapped pages count in RSS (file-backed, reclaimable): RSS after the tool mix at 5,000 docs 160 → 437 MiB, all of the increase `RssFile` (anonymous memory fell). |
+| 1.9 | Dropped | — | 15–18 ms per start did not justify changing the import-time registration of `server.mcp`. |
+
+Harness, base against tip (p50 / p95 in ms):
+
+| Scenario | 500 docs | 5,000 docs |
+|---|---|---|
+| `search` hybrid, selective (2 %) | 8.6 / 12.1 → 4.9 / 6.2 | 51.4 / 64.9 → 5.7 / 8.1 |
+| `search` hybrid, Zipf | 14.9 / 32.9 → 11.0 / 15.7 | 108 / 145 → 79 / 133 |
+| `context_pack`, selective | 13.1 / 31.6 → 7.5 / 10.7 | 55.9 / 70.6 → 8.9 / 16.8 |
+| `search_deep`, Zipf | 55.1 / 81.7 → 39.7 / 53.3 | 752 / 867 → 791 / 957 (within noise; the hop pass is 2.3) |
+| `get_document` by path | 0.67 / 21.5 → 0.78 / 1.10 | 0.82 / 3.12 → 1.06 / 1.58 |
+| index full build | 981 → 645 | 18,611 → 6,596 |
+| no-op reindex | 134 → 125 | 1,436 → 1,524 (unchanged; 2.2) |
+| stdio `search` round trip (500 docs) | 14.0 / 42.0 → 7.7 / 8.7 | |
+
+Against the proposed SLOs at 5,000 documents, after Phase 1: selective `search` p50 5.7 ms and `context_pack` p95 16.8 ms are inside them; `get_document` p99 is under 5 ms; `doctor --brief` (185 ms) and the warm launcher (92 ms) are inside them; the full build (6.6 s) is under 8 s. Still outside: `search` on unselective Zipf queries (2.1, 3.3), `search_deep` (2.3), the no-op reindex (2.2) and spawn to `initialize` (700 ms, the SDK import).
 
 ## How to read the numbers
 
