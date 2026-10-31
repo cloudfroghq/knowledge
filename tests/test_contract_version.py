@@ -118,8 +118,8 @@ PREVIOUS = max(
 )
 
 #: Subsections of a version that may declare a golden whose bytes changed.
-#: A breaking version declares its changes under «Rompe».
-DECLARING_SUBSECTIONS = ("Añadido", "Cambiado (no aditivo)", "Rompe")
+#: A breaking version declares its changes under "Breaking".
+DECLARING_SUBSECTIONS = ("Added", "Changed (non-additive)", "Breaking")
 
 needs_a_newer_version = pytest.mark.skipif(
     contract.CONTRACT_VERSION == "1.0.0", reason="the baseline version declares no change against itself"
@@ -192,7 +192,7 @@ def _explained_by_the_migration(frozen: Path, live: Path) -> bool:
     """Whether a 1.4.0 golden, migrated by the declared 2.0 rules, is the live one but for the version.
 
     Only a breaking version replays its predecessor through a migration; the
-    rules of that migration are the rows of «Rompe» (``golden_compat``), so a
+    rules of that migration are the rows of "Breaking" (``golden_compat``), so a
     golden they fully explain is declared by them. The contract version
     itself (``list_vaults.contract`` and the first line of ``instructions``)
     is version-bound.
@@ -232,11 +232,11 @@ def _explained_by_the_migration(frozen: Path, live: Path) -> bool:
 
 @needs_a_newer_version
 def test_every_golden_whose_bytes_changed_is_declared() -> None:
-    """A golden that differs from the previous version names its tool under Añadido, Cambiado (no aditivo) or Rompe.
+    """A golden that differs from the previous version names its tool under Added, Changed (non-additive) or Breaking.
 
     The catalog is declared as ``tools/list``; the handshake as ``initialize``.
     A breaking version also declares a golden through the migration its
-    «Rompe» rules define, when that migration explains every byte.
+    "Breaking" rules define, when that migration explains every byte.
     """
     subsections = _subsections(_version_section(contract.CONTRACT_VERSION))
     declaring = "".join(subsections.get(name, "") for name in DECLARING_SUBSECTIONS)
@@ -257,10 +257,10 @@ def test_every_golden_whose_bytes_changed_is_declared() -> None:
 
 
 def test_subsections_are_parsed_by_name() -> None:
-    section = "\n### Añadido\n\n- `a`\n\n### Cambiado (no aditivo)\n\n- `b`\n"
+    section = "\n### Added\n\n- `a`\n\n### Changed (non-additive)\n\n- `b`\n"
 
     parsed = _subsections(section)
 
-    assert set(parsed) == {"Añadido", "Cambiado (no aditivo)"}
-    assert "`b`" in parsed["Cambiado (no aditivo)"]
-    assert "`b`" not in parsed["Añadido"]
+    assert set(parsed) == {"Added", "Changed (non-additive)"}
+    assert "`b`" in parsed["Changed (non-additive)"]
+    assert "`b`" not in parsed["Added"]

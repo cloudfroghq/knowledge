@@ -44,7 +44,7 @@ test('the manifest: two bins, no runtime dependencies, Node 18 or later', () => 
     assert.equal(manifest[field], undefined, `${field} must stay empty`);
   }
   assert.equal(manifest.engines.node, '>=18');
-  assert.equal(manifest.license, 'SEE LICENSE IN LICENSE');
+  assert.equal(manifest.license, 'MIT');
   assert.equal(manifest.publishConfig.access, 'public');
   // npm provenance requires the repository to be the one the workflow runs in.
   assert.equal(manifest.repository.url, 'git+https://github.com/cloudfroghq/knowledge.git');

@@ -1,59 +1,61 @@
-# Plugin `knowledge` para Claude Code
+# `knowledge` plugin for Claude Code
 
-Sirve el servidor MCP de conocimiento curado sobre tus vaults locales por stdio. Claude Code lo arranca con `uvx`, que instala el paquete `cloudfrog-knowledge` desde el tag del repositorio que nombra `.mcp.json`. Se instala desde el marketplace `cloudfroghq`:
+Serves the curated-knowledge MCP server over your local vaults through stdio. Claude Code starts it with `uvx`, which installs the `cloudfrog-knowledge` package from the repository tag named in `.mcp.json`. Install it from the `cloudfroghq` marketplace:
 
 ```bash
 claude plugin marketplace add cloudfroghq/claude-plugins
 claude plugin install knowledge@cloudfroghq --scope user
 ```
 
-La guía completa por equipo, con prerrequisitos y precalentado de la caché, está en [`docs/install.md`](../../docs/install.md).
+The full team guide, with prerequisites and cache warm-up, is in [`docs/install.md`](../../docs/install.md).
 
-## Qué trae
+## What it ships
 
-| Pieza | Qué hace |
+| Piece | What it does |
 |---|---|
-| `.mcp.json` | Servidor `knowledge`: `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v<versión> cloudfrog-knowledge serve --transport stdio`. Sus tools llegan como `mcp__plugin_knowledge_knowledge__<tool>` y el servidor aparece en `/mcp` como `plugin:knowledge:knowledge`. |
-| `hooks/hooks.json` | `SessionStart` que corre `cloudfrog-knowledge doctor --brief` con el mismo paquete y las mismas opciones que el servidor. No imprime nada si todo está bien; si algo falla, una sola línea de hasta 200 bytes, sin contar el salto de línea (el tope de `doctor --brief`). También habla, con el doctor sano, cuando un vault servido declara `Contexts/config.json` y esta máquina no lo inicializó: `knowledge doctor: init pending for vault(s) <slugs>; run: cloudfrog-knowledge init`. Si el doctor no contesta en 8 segundos (caché de `uv` fría) también calla. Si `uvx` falla sin que el doctor diga nada (sin red, o un tag que el remoto no tiene), avisa una vez por día y por versión del plugin, no en cada arranque. Lo único que el hook escribe en disco es la marca de ese aviso (ver Diagnóstico). Con el doctor sano, lanza además `cloudfrog-knowledge jira sync --auto` en segundo plano, desprendido del hook (no lo espera ni muestra su salida): sincroniza los vaults que declaran `jira`, tienen sus variables y ya cumplieron `sync.throttle_minutes`, y escribe sus tareas en el memory local y el cursor junto al índice. `KNOWLEDGE_JIRA_AUTOSYNC=0` lo apaga (`docs/runbooks/sincronizar-jira.md`). |
-| `skills/search-first` | Protocolo de lectura: `search` con campos de puntero y `get_document` de una sola sección. |
-| `skills/repair-mcp-tool` | Reparación de una tool rota con su test de regresión en rojo primero. |
-| `skills/code-question` | Pregunta conceptual sobre código sin un identificador conocido: `jg` (jevgrep) sobre una carpeta estrecha con `--max-source-bytes 20000`, nunca sobre un vault; conteos, símbolos e impacto quedan en `rg` y graphify. |
+| `.mcp.json` | The `knowledge` server: `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v<version> cloudfrog-knowledge serve --transport stdio`. Its tools arrive as `mcp__plugin_knowledge_knowledge__<tool>` and the server appears in `/mcp` as `plugin:knowledge:knowledge`. |
+| `hooks/hooks.json` | A `SessionStart` hook that runs `cloudfrog-knowledge doctor --brief` with the same package and options as the server. It prints nothing if everything is fine; if something fails, it prints a single line of up to 200 bytes, not counting the newline (the cap of `doctor --brief`). With a healthy doctor it also speaks up when a served vault declares `Contexts/config.json` and this machine has not initialized it: `knowledge doctor: init pending for vault(s) <slugs>; run: cloudfrog-knowledge init`. If the doctor does not answer within 8 seconds (cold `uv` cache) it also stays silent. If `uvx` fails without the doctor saying anything (no network, or a tag the remote does not have), it warns once per day and per plugin version, not on every startup. The only thing the hook writes to disk is the marker of that warning (see Diagnostics). With a healthy doctor it also launches `cloudfrog-knowledge jira sync --auto` in the background, detached from the hook (the hook neither waits for it nor shows its output): it syncs the vaults that declare `jira`, have their variables set and have already passed `sync.throttle_minutes`, and writes their tasks to the local memory and the cursor next to the index. `KNOWLEDGE_JIRA_AUTOSYNC=0` turns it off (`docs/runbooks/sync-jira.md`). |
+| `skills/search-first` | Reading protocol: `search` with pointer fields and a single-section `get_document`. |
+| `skills/repair-mcp-tool` | Repair of a broken tool, with its regression test in red first. |
+| `skills/code-question` | Conceptual question about code without a known identifier: `jg` (jevgrep) over a narrow folder with `--max-source-bytes 20000`, never over a vault; counts, symbols and impact stay with `rg` and graphify. |
 
-## Opciones (`userConfig`)
+## Options (`userConfig`)
 
-| Opción | Variable que recibe el servidor | Vacía |
+| Option | Variable the server receives | When empty |
 |---|---|---|
-| `vaults_config` (archivo) | `KNOWLEDGE_VAULTS` | El servidor usa `~/.config/knowledge/vaults.yaml` (o `$XDG_CONFIG_HOME/knowledge/vaults.yaml`). |
-| `embeddings_provider` (`openai`, `none` o `bag-of-words`) | `KNOWLEDGE_EMBEDDINGS_PROVIDER` | Decide el `vaults.yaml` (por omisión `openai`). |
+| `vaults_config` (file) | `KNOWLEDGE_VAULTS` | The server uses `~/.config/knowledge/vaults.yaml` (or `$XDG_CONFIG_HOME/knowledge/vaults.yaml`). |
+| `embeddings_provider` (`openai`, `none` or `bag-of-words`) | `KNOWLEDGE_EMBEDDINGS_PROVIDER` | `vaults.yaml` decides (`openai` by default). |
 
-Claude Code exporta una opción sin valor como cadena vacía, y el servidor trata una cadena vacía como variable ausente: dejar las dos opciones vacías es el caso normal.
+Claude Code exports an option with no value as an empty string, and the server treats an empty string as an absent variable: leaving both options empty is the normal case.
 
-Para guardarlas: `/plugin` → `Installed` → `knowledge` → `Configure` dentro de la sesión, o `claude plugin configure knowledge@cloudfroghq --values-stdin < valores.json`. Después hay que reiniciar Claude Code.
+To save them: `/plugin` → `Installed` → `knowledge` → `Configure` inside the session, or `claude plugin configure knowledge@cloudfroghq --values-stdin < values.json`. Claude Code must be restarted afterwards.
 
-## Lo que el plugin no define, y por qué
+## What the plugin does not define, and why
 
-- **`KNOWLEDGE_HOME`**: gana sobre `data_dir` del `vaults.yaml`. Apuntarlo al directorio de datos del plugin (`${CLAUDE_PLUGIN_DATA}`) haría que desinstalar o reinstalar el plugin borrara los índices y obligara a embeber de nuevo todos los vaults. Los índices viven donde diga tu `vaults.yaml` (`data_dir`) o, sin eso, en `~/.local/share/knowledge`.
-- **`OPENAI_API_KEY`**: el servidor la hereda del entorno con el que arranca Claude Code. Si el `.mcp.json` la mapeara desde una opción sin valor, Claude Code exportaría una cadena vacía encima de la variable heredada y el arranque caería con `E_EMBEDDINGS_KEY_MISSING`. Si tu sesión no hereda la clave, `cloudfrog-knowledge doctor` lo dice con ese mismo código.
+- **`KNOWLEDGE_HOME`**: it takes precedence over the `data_dir` of `vaults.yaml`. Pointing it at the plugin's data directory (`${CLAUDE_PLUGIN_DATA}`) would make uninstalling or reinstalling the plugin delete the indexes and force every vault to be embedded again. The indexes live where your `vaults.yaml` says (`data_dir`) or, without that, in `~/.local/share/knowledge`.
+- **`OPENAI_API_KEY`**: the server inherits it from the environment Claude Code starts with. If `.mcp.json` mapped it from an option with no value, Claude Code would export an empty string on top of the inherited variable and startup would fail with `E_EMBEDDINGS_KEY_MISSING`. If your session does not inherit the key, `cloudfrog-knowledge doctor` reports it with that same code.
 
-## Variables de entorno opcionales
+## Optional environment variables
 
-| Variable | Para qué |
+| Variable | What for |
 |---|---|
-| `UVX_BIN` | Ruta absoluta de `uvx` cuando Claude Code no hereda tu `PATH` (por ejemplo, abierto desde el Dock). Por omisión, `uvx` resuelto por `PATH`. |
-| `KNOWLEDGE_DOCTOR_BUDGET` | Segundos que el hook espera al doctor (por omisión 8). |
-| `XDG_CACHE_HOME` | Base de la marca del aviso diario del hook (`knowledge/session-start-package-failed`). Por omisión, `$HOME/.cache`. |
-| `MCP_TIMEOUT` | Milisegundos que Claude Code espera el arranque de un servidor MCP. El primer arranque con la caché fría puede pasar de los 30 s por omisión: `60000` da margen. |
+| `UVX_BIN` | Absolute path to `uvx` when Claude Code does not inherit your `PATH` (for example, when opened from the Dock). By default, `uvx` resolved through `PATH`. |
+| `KNOWLEDGE_DOCTOR_BUDGET` | Seconds the hook waits for the doctor (8 by default). |
+| `XDG_CACHE_HOME` | Base of the hook's daily-warning marker (`knowledge/session-start-package-failed`). By default, `$HOME/.cache`. |
+| `MCP_TIMEOUT` | Milliseconds Claude Code waits for an MCP server to start. The first startup with a cold cache can exceed the default 30 s: `60000` gives some margin. |
 
-## Diagnóstico
+## Diagnostics
 
 ```bash
-uvx --managed-python --python 3.12 --from 'git+https://github.com/cloudfroghq/knowledge.git@v0.9.0' cloudfrog-knowledge doctor
+uvx --managed-python --python 3.12 --from 'git+https://github.com/cloudfroghq/knowledge.git@vX.Y.Z' cloudfrog-knowledge doctor
 ```
 
-Imprime un JSON con la regla de descubrimiento que ganó, el archivo de registro, por vault el directorio, el proveedor y si su clave está definida (nunca el valor), si `KNOWLEDGE_HOME` se puede escribir y las versiones del paquete y del contrato. Sale con 0 si todo está bien, 1 con problemas y 2 si la configuración no carga.
+`vX.Y.Z` stands for the plugin's version (`version` in `plugin.json`; the same tag the plugin's `.mcp.json` pins). `scripts/bump-version.sh` does not update the docs, so the version is written as a placeholder here.
 
-El hook de inicio de sesión no repite el mismo fallo en cada arranque. Cuando `uvx` no logra ni arrancar el paquete (sin red, o un tag que el remoto no tiene), imprime `knowledge: server package failed (uvx rc N); diagnose: …` una vez por día y por versión del plugin. La marca es el archivo de una línea `${XDG_CACHE_HOME:-$HOME/.cache}/knowledge/session-start-package-failed`: borrarlo repite el aviso en el siguiente arranque, y si no se puede escribir, el aviso sale en todos. Reintentar con `uvx --offline` no sirve: con uv 0.10 un tag git se consulta en el remoto incluso con esa bandera. Mientras tanto, `/mcp` muestra el servidor como `failed`.
+It prints a JSON with the discovery rule that won, the registry file, and per vault the directory, the provider and whether its key is defined (never the value), whether `KNOWLEDGE_HOME` is writable, and the package and contract versions. It exits 0 if everything is fine, 1 with problems and 2 if the configuration does not load.
 
-## Versión
+The session-start hook does not repeat the same failure on every startup. When `uvx` cannot even start the package (no network, or a tag the remote does not have), it prints `knowledge: server package failed (uvx rc N); diagnose: …` once per day and per plugin version. The marker is the one-line file `${XDG_CACHE_HOME:-$HOME/.cache}/knowledge/session-start-package-failed`: deleting it repeats the warning on the next startup, and if it cannot be written, the warning appears on every startup. Retrying with `uvx --offline` does not help: with uv 0.10 a git tag is looked up on the remote even with that flag. Meanwhile, `/mcp` shows the server as `failed`.
 
-`version` de `plugin.json`, el `@v<versión>` de `.mcp.json` y `version` de `pyproject.toml` (más el proyecto en `uv.lock`) se mueven juntos con `scripts/bump-version.sh X.Y.Z` y se comprueban con `scripts/check-version.sh [vX.Y.Z]`. El tag se corta después de mergear el pull request de la release, sobre ese merge.
+## Version
+
+`version` in `plugin.json`, the `@v<version>` in `.mcp.json` and `version` in `pyproject.toml`, `version` in `npm/package.json` (plus the project in `uv.lock`) move together with `scripts/bump-version.sh X.Y.Z` and are checked with `scripts/check-version.sh [vX.Y.Z]`. The tag is cut after merging the release pull request, on that merge.

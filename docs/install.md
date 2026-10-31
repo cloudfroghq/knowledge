@@ -1,156 +1,156 @@
-# Instalación por equipo
+# Team installation
 
-Tres perfiles, una línea cada uno. Todos salen del marketplace público `cloudfroghq` (`cloudfroghq/claude-plugins`):
+Three profiles, one line each. All of them come from the public `cloudfroghq` marketplace (`cloudfroghq/claude-plugins`):
 
-| Plugin | Qué sirve | Prefijo de sus tools | Para quién |
+| Plugin | What it serves | Tool prefix | For whom |
 |---|---|---|---|
-| `knowledge@cloudfroghq` | Este servidor por stdio, lanzado con `uvx` desde el tag del repositorio público | `mcp__plugin_knowledge_knowledge__` | Quien tiene sus vaults en disco |
-| `knowledge-remote@cloudfroghq` | El servidor HTTP del despliegue de tu organización | `mcp__plugin_knowledge-remote_knowledge__` | Quien no tiene acceso al código |
-| `memory@cloudfroghq` | Memoria de sesión (binario `memory`) | `mcp__plugin_memory_memory__` | Todos |
+| `knowledge@cloudfroghq` | This server over stdio, launched with `uvx` from the public repository's tag | `mcp__plugin_knowledge_knowledge__` | Anyone with their vaults on disk |
+| `knowledge-remote@cloudfroghq` | Your organization's deployed HTTP server | `mcp__plugin_knowledge-remote_knowledge__` | Anyone without access to the code |
+| `memory@cloudfroghq` | Session memory (the `memory` binary) | `mcp__plugin_memory_memory__` | Everyone |
 
-`knowledge` y `knowledge-remote` no se instalan juntos: expondrían el mismo catálogo dos veces.
+`knowledge` and `knowledge-remote` are not installed together: they would expose the same catalog twice.
 
-## Prerrequisitos
+## Prerequisites
 
-- Claude Code 2.1.275 o posterior, el mismo mínimo que pide el marketplace `cloudfroghq/claude-plugins` (`claude --version`).
-- Para `knowledge` (stdio):
-  - `uv` (`brew install uv`) con un CPython de `uv`: el plugin lanza el servidor con `uvx --managed-python --python 3.12`, que descarga un Python 3.12 gestionado la primera vez si no lo tienes. Hace falta porque `sqlite-vec`, la extensión que ordena los vectores, solo carga en un Python con extensiones habilitadas, y el de python.org para macOS no las trae. Sin ella el servidor sigue funcionando: ordena los vectores con la biblioteca estándar (`vector_backend: python` en `doctor` y `/health`, unos 110 ms por consulta en lugar de unos 10) y da el mismo resultado; solo cambia la velocidad. `KNOWLEDGE_REQUIRE_SQLITE_VEC=1` convierte ese respaldo en el error `E_SQLITE_VEC_UNAVAILABLE`. `uvx` tiene que resolverse desde el entorno con el que arranca Claude Code. Si lo abres desde el Dock y no hereda tu `PATH`, define `UVX_BIN` con la ruta absoluta (`/opt/homebrew/bin/uvx`).
-  - `bash` en el `PATH` para el hook de inicio de sesión del plugin (`#!/usr/bin/env bash`): el tope de 8 segundos del doctor necesita control de trabajos sin terminal, que `dash` (el `/bin/sh` de Debian y Ubuntu) no da. macOS y las distribuciones de escritorio lo traen; Alpine no lo trae por omisión (`apk add bash`). Sin `bash` el hook no arranca, pero el servidor MCP no depende de él: solo se pierde el aviso de `doctor --brief`.
-  - Acceso a `github.com` por HTTPS: `uvx` trae el tag del repositorio público por `git+https`, sin llave SSH ni credenciales.
-  - Un registro de vaults en `~/.config/knowledge/vaults.yaml` (o el archivo que elijas en la opción `vaults_config`). El formato está en [`runbooks/servir-varios-vaults.md`](runbooks/servir-varios-vaults.md).
-  - `OPENAI_API_KEY` en el entorno de la sesión si algún vault usa el proveedor `openai`. Una variable definida solo en la configuración de tu shell no llega a Claude Code abierto desde el Dock; ahí hace falta `launchctl setenv` (o un LaunchAgent que lo haga al iniciar sesión), o el proveedor `none`.
-- Para `memory`: el binario `memory` en el `PATH` (abajo, con Homebrew o sin él).
+- Claude Code 2.1.275 or later, the same minimum the `cloudfroghq/claude-plugins` marketplace requires (`claude --version`).
+- For `knowledge` (stdio):
+  - `uv` (`brew install uv`) with a `uv` CPython: the plugin launches the server with `uvx --managed-python --python 3.12`, which downloads a managed Python 3.12 the first time if you do not have one. This is needed because `sqlite-vec`, the extension that sorts the vectors, loads only in a Python with extensions enabled, and the python.org build for macOS does not ship them. Without it the server keeps working: it sorts the vectors with the standard library (`vector_backend: python` in `doctor` and `/health`, about 110 ms per query instead of about 10) and gives the same result; only the speed changes. `KNOWLEDGE_REQUIRE_SQLITE_VEC=1` turns that fallback into the error `E_SQLITE_VEC_UNAVAILABLE`. `uvx` has to resolve from the environment Claude Code starts with. If you open it from the Dock and it does not inherit your `PATH`, set `UVX_BIN` to the absolute path (`/opt/homebrew/bin/uvx`).
+  - `bash` on the `PATH` for the plugin's session-start hook (`#!/usr/bin/env bash`): the doctor's 8-second cap needs job control without a terminal, which `dash` (the `/bin/sh` of Debian and Ubuntu) does not provide. macOS and desktop distributions ship it; Alpine does not by default (`apk add bash`). Without `bash` the hook does not start, but the MCP server does not depend on it: you only lose the `doctor --brief` warning.
+  - Access to `github.com` over HTTPS: `uvx` fetches the public repository's tag over `git+https`, with no SSH key or credentials.
+  - A vault registry at `~/.config/knowledge/vaults.yaml` (or the file you choose in the `vaults_config` option). The format is in [`runbooks/serve-multiple-vaults.md`](runbooks/serve-multiple-vaults.md).
+  - `OPENAI_API_KEY` in the session environment if any vault uses the `openai` provider. A variable defined only in your shell configuration does not reach Claude Code when it is opened from the Dock; there you need `launchctl setenv` (or a LaunchAgent that does it at login), or the `none` provider.
+- For `memory`: the `memory` binary on the `PATH` (below, with or without Homebrew).
 
-## Con acceso al código (stdio con tus vaults)
+## With code access (stdio with your vaults)
 
 ```bash
-claude plugin marketplace add cloudfroghq/claude-plugins && claude plugin install knowledge@cloudfroghq --scope user && claude plugin install memory@cloudfroghq --scope user && uvx --managed-python --python 3.12 --from 'git+https://github.com/cloudfroghq/knowledge.git@v0.9.0' cloudfrog-knowledge doctor && memory setup claude-code
+claude plugin marketplace add cloudfroghq/claude-plugins && claude plugin install knowledge@cloudfroghq --scope user && claude plugin install memory@cloudfroghq --scope user && uvx --managed-python --python 3.12 --from 'git+https://github.com/cloudfroghq/knowledge.git@vX.Y.Z' cloudfrog-knowledge doctor && memory setup claude-code
 ```
 
-- El `uvx … doctor` del final **precalienta la caché** de `uv` (el primer arranque clona el tag, descarga unos 15 MB de dependencias y, si hace falta, el Python gestionado, y puede tardar más que los 30 s que Claude Code espera por omisión a un servidor MCP) y diagnostica la instalación: sale con 0 si todo está bien.
-- Añade `"MCP_TIMEOUT": "60000"` al bloque `env` de `~/.claude/settings.json` como red de seguridad para el primer arranque.
-- `memory setup claude-code` regenera los permisos de las tools de memory.
+- The `uvx … doctor` at the end **warms up the cache** of `uv` (the first start clones the tag, downloads about 15 MB of dependencies and, if needed, the managed Python, and can take longer than the 30 s Claude Code waits for an MCP server by default) and diagnoses the installation: it exits with 0 if everything is fine.
+- Add `"MCP_TIMEOUT": "60000"` to the `env` block of `~/.claude/settings.json` as a safety net for the first start.
+- `memory setup claude-code` regenerates the memory tools' permissions.
 
-Comprobación: `/mcp` muestra `plugin:knowledge:knowledge` y `plugin:memory:memory` conectados.
+Check: `/mcp` shows `plugin:knowledge:knowledge` and `plugin:memory:memory` connected.
 
-## Sin acceso al código (HTTP con `knowledge-remote`)
+## Without code access (HTTP with `knowledge-remote`)
 
-`knowledge-remote` se conecta al servidor HTTP que despliega tu organización: exige que sirva por TLS y entregue un bearer por persona. La URL del endpoint MCP (`https://<despliegue>/mcp`), el bearer y los alcances de cada despliegue se documentan en su vault, en `Deploy/`. Mientras el despliegue no sirva por TLS ni entregue un bearer por persona, no se reparte ningún bearer.
+`knowledge-remote` connects to the HTTP server your organization deploys: it requires that it serve over TLS and hand out one bearer per person. The MCP endpoint URL (`https://<deployment>/mcp`), the bearer and the scopes of each deployment are documented in its vault, under `Deploy/`. As long as the deployment does not serve over TLS or hand out one bearer per person, no bearer is distributed.
 
 ```bash
 export CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1 && claude plugin marketplace add cloudfroghq/claude-plugins && brew install cloudfroghq/tap/memory && claude plugin install memory@cloudfroghq --scope user && claude plugin install knowledge-remote@cloudfroghq --scope user && memory setup claude-code
 ```
 
-- `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` hace que Claude Code clone el marketplace por HTTPS: sin llave SSH de GitHub es obligatorio, también para las actualizaciones. Déjalo exportado en tu shell.
-- Sin Homebrew, en lugar de `brew install cloudfroghq/tap/memory` (macOS arm64; en Linux cambia `darwin_arm64` por `linux_amd64`):
+- `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` makes Claude Code clone the marketplace over HTTPS: without a GitHub SSH key it is mandatory, also for updates. Leave it exported in your shell.
+- Without Homebrew, instead of `brew install cloudfroghq/tap/memory` (macOS arm64; on Linux replace `darwin_arm64` with `linux_amd64`):
 
   ```bash
   gh release download -R cloudfroghq/memory-releases -p 'memory_*_darwin_arm64.tar.gz' -p checksums.txt && shasum -a 256 -c checksums.txt --ignore-missing && tar xzf memory_*_darwin_arm64.tar.gz memory && install -m 0755 memory /usr/local/bin/memory && memory --version
   ```
 
-  El repositorio es público: `gh release download` no exige iniciar sesión, y `curl -LO` a las mismas URLs también sirve.
-- Después, dentro de Claude Code: `/plugin` → `Installed` → `knowledge-remote` → `Configure`, con la URL `https://<despliegue>/mcp` y tu bearer personal. Fuera de la sesión: `claude plugin configure knowledge-remote@cloudfroghq --values-stdin < valores.json`. No uses `claude plugin install … --config` para el bearer: queda en el historial del shell. Reinicia Claude Code para aplicarlo.
-- Sin plugin, el mismo servidor se registra a mano: `claude mcp add -s user -t http knowledge https://<despliegue>/mcp -H 'Authorization: Bearer <bearer>'`.
+  The repository is public: `gh release download` does not require logging in, and `curl -LO` against the same URLs also works.
+- Afterwards, inside Claude Code: `/plugin` → `Installed` → `knowledge-remote` → `Configure`, with the URL `https://<deployment>/mcp` and your personal bearer. Outside the session: `claude plugin configure knowledge-remote@cloudfroghq --values-stdin < values.json`. Do not use `claude plugin install … --config` for the bearer: it ends up in your shell history. Restart Claude Code to apply it.
+- Without the plugin, the same server is registered by hand: `claude mcp add -s user -t http knowledge https://<deployment>/mcp -H 'Authorization: Bearer <bearer>'`.
 
-Comprobación: `curl -s https://<despliegue>/health` responde `status: ok` con `contract_version`, y `/mcp` dentro de Claude Code muestra `plugin:knowledge-remote:knowledge` y `plugin:memory:memory` conectados.
+Check: `curl -s https://<deployment>/health` responds `status: ok` with `contract_version`, and `/mcp` inside Claude Code shows `plugin:knowledge-remote:knowledge` and `plugin:memory:memory` connected.
 
-## Instalar el CLI
+## Install the CLI
 
-`init`, `doctor`, `vault-lint` y el resto de los subcomandos se corren desde tu terminal. El mismo paquete se publica por tres canales, siempre con la misma versión:
+`init`, `doctor`, `vault-lint` and the rest of the subcommands run from your terminal. The same package is published through three channels, always with the same version:
 
-| Canal | Instalar una vez | Correr sin instalar |
+| Channel | Install once | Run without installing |
 |---|---|---|
-| PyPI (`cloudfrog-knowledge`) | `uv tool install --managed-python --python 3.12 cloudfrog-knowledge` | `uvx --managed-python --python 3.12 cloudfrog-knowledge <subcomando>` |
-| npm (`@cloudfrog/knowledge`) | `npm install -g @cloudfrog/knowledge` | `npx @cloudfrog/knowledge <subcomando>` o `pnpm dlx @cloudfrog/knowledge <subcomando>` |
-| Tag de git | `uv tool install --managed-python --python 3.12 git+https://github.com/cloudfroghq/knowledge.git@v0.9.0` | `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v0.9.0 cloudfrog-knowledge <subcomando>` |
+| PyPI (`cloudfrog-knowledge`) | `uv tool install --managed-python --python 3.12 cloudfrog-knowledge` | `uvx --managed-python --python 3.12 cloudfrog-knowledge <subcommand>` |
+| npm (`@cloudfrog/knowledge`) | `npm install -g @cloudfrog/knowledge` | `npx @cloudfrog/knowledge <subcommand>` or `pnpm dlx @cloudfrog/knowledge <subcommand>` |
+| Git tag | `uv tool install --managed-python --python 3.12 git+https://github.com/cloudfroghq/knowledge.git@vX.Y.Z` | `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@vX.Y.Z cloudfrog-knowledge <subcommand>` |
 
-- Cada instalación deja dos comandos que son el mismo programa: `knowledge` y `cloudfrog-knowledge`. El uso (`--help`), `--version` y las pistas de `doctor` e `init` nombran el que corriste; `KNOWLEDGE_COMMAND_LABEL` sigue mandando sobre ambos (ver el README, «Etiqueta del comando en las pistas»).
-- `--managed-python --python 3.12`: el paquete declara `requires-python >=3.12,<3.13`, pero `uv` ignora el tope al elegir intérprete y, sin `--python`, usaría el primer Python más nuevo que encuentre. El CPython gestionado por `uv` además carga `sqlite-vec` (ver Prerrequisitos).
-- El paquete de npm no trae Python: en la primera corrida descarga `uv` 0.10.4 de su release en GitHub, comprueba su SHA-256 contra la suma que viene dentro del paquete, lo guarda en `~/.cache/cloudfrog-knowledge/uv/` (`%LOCALAPPDATA%` en Windows) y corre `uv tool run --managed-python --python 3.12 --from cloudfrog-knowledge==<versión> <comando>`. Funciona en macOS (arm64, x64), Linux (x64, arm64; glibc o musl) y Windows (x64, arm64). Detrás de un proxy que Node no atraviesa, apunta `CLOUDFROG_KNOWLEDGE_UV` a un `uv` que ya tengas. Un fallo del paquete antes de arrancar el CLI imprime `<código>: <mensaje>` en stderr y sale con 2.
-- Fija la versión cuando la uses desde un script o un `.mcp.json`: `cloudfrog-knowledge==0.9.0` (o `uvx … cloudfrog-knowledge@0.9.0`), `npx @cloudfrog/knowledge@0.9.0` o el tag `@v0.9.0`.
+- Each installation leaves two commands that are the same program: `knowledge` and `cloudfrog-knowledge`. The usage (`--help`), `--version` and the hints of `doctor` and `init` name the one you ran; `KNOWLEDGE_COMMAND_LABEL` still takes precedence over both (see the [README](../README.md), "Command label in hints").
+- `--managed-python --python 3.12`: the package declares `requires-python >=3.12,<3.13`, but `uv` ignores the upper bound when choosing an interpreter and, without `--python`, would use the first newer Python it finds. The `uv`-managed CPython also loads `sqlite-vec` (see Prerequisites).
+- The npm package ships no Python: on the first run it downloads `uv` 0.10.4 from its GitHub release, checks its SHA-256 against the checksum bundled inside the package, stores it in `~/.cache/cloudfrog-knowledge/uv/` (`%LOCALAPPDATA%` on Windows) and runs `uv tool run --managed-python --python 3.12 --from cloudfrog-knowledge==<version> <command>`. It works on macOS (arm64, x64), Linux (x64, arm64; glibc or musl) and Windows (x64, arm64). Behind a proxy that Node does not traverse, point `CLOUDFROG_KNOWLEDGE_UV` at a `uv` you already have. A package failure before the CLI starts prints `<code>: <message>` on stderr and exits with 2.
+- Pin the version when you use it from a script or an `.mcp.json`: `cloudfrog-knowledge==X.Y.Z` (or `uvx … cloudfrog-knowledge@X.Y.Z`), `npx @cloudfrog/knowledge@X.Y.Z` or the tag `@vX.Y.Z`. Throughout this guide `vX.Y.Z` / `X.Y.Z` is a release version: take the latest one from the [releases](https://github.com/cloudfroghq/knowledge/releases) (the docs do not track `scripts/bump-version.sh`).
 
-Comprobación: `knowledge --version` (o `npx @cloudfrog/knowledge --version`) imprime `knowledge 0.9.0`; `knowledge doctor` diagnostica la instalación con tus vaults.
+Check: `knowledge --version` (or `npx @cloudfrog/knowledge --version`) prints `knowledge X.Y.Z`; `knowledge doctor` diagnoses the installation with your vaults.
 
-## Inicializar el cliente
+## Initialize the client
 
-Un vault que declara `Contexts/config.json` trae el paquete de contexto de cada aplicación (`Contexts/<app>/`: `CLAUDE.md`, `.mcp.json` y `.claude/`). Enlazarlo en tus checkouts es trabajo de tu máquina, nunca del servidor: un despliegue remoto no ve tu disco. Con tus vaults ya registrados (`~/.config/knowledge/vaults.yaml`):
+A vault that declares `Contexts/config.json` ships the context package of each application (`Contexts/<app>/`: `CLAUDE.md`, `.mcp.json` and `.claude/`). Linking it into your checkouts is your machine's job, never the server's: a remote deployment cannot see your disk. With your vaults already registered (`~/.config/knowledge/vaults.yaml`):
 
 ```bash
 cloudfrog-knowledge init --dry-run --repo <id> && cloudfrog-knowledge init --repo <id>
 ```
 
-Cada máquina elige en qué checkouts instala un paquete: la lista `apply` de su `repos.local.json`, con los identificadores del registro (`Contexts/config.json`). El registro es el mismo para todos; la selección es tuya.
+Each machine chooses in which checkouts it installs a package: the `apply` list of its `repos.local.json`, with the registry's identifiers (`Contexts/config.json`). The registry is the same for everyone; the selection is yours.
 
-- `--repo ID` agrega `ID` a `apply` (repetible; `--repo SLUG:ID` lo limita a un vault). Puedes seleccionar un checkout que todavía no clonas: `init` lo instala cuando aparezca.
-- `--all` agrega cada checkout presente en esta máquina que tiene paquete.
-- `--drop ID` lo quita de `apply` y borra solo los enlaces de ese checkout que apuntan a `Contexts/<paquete>/`; tus archivos, tus enlaces propios, una copia (modo `copy`) y las entradas de ignorado se quedan.
-- Sin bandera, `init` instala lo que ya dice `apply`. En una máquina nueva (sin `apply` y sin paquetes instalados) te pregunta en una terminal qué checkouts quieres (`all`, `none`, una lista de ids, o vacío para decidir después); con `--yes` o sin terminal no instala nada y te lista los checkouts presentes con la pista `--repo ID`.
-- La primera corrida de esta versión sobre un `repos.local.json` sin `apply` lo crea con los checkouts que ya tienen su paquete instalado (enlaces hacia `Contexts/<paquete>/`, o la copia que hizo `init` en modo `copy`): tu configuración no cambia.
-- Un id que el registro ya no declara sale de `apply` con un aviso. `--dry-run` muestra los cambios de la selección (`would add`, `would remove`) sin escribir nada.
-- `apply` solo decide dónde se instalan los paquetes: los objetivos del grafo y el servidor leen el registro sin mirarla.
+- `--repo ID` adds `ID` to `apply` (repeatable; `--repo SLUG:ID` limits it to one vault). You can select a checkout you have not cloned yet: `init` installs it when it appears.
+- `--all` adds every checkout present on this machine that has a package.
+- `--drop ID` removes it from `apply` and deletes only that checkout's links that point to `Contexts/<package>/`; your files, your own links, a copy (`copy` mode) and the ignore entries stay.
+- With no flag, `init` installs what `apply` already says. On a new machine (no `apply` and no installed packages) it asks you in a terminal which checkouts you want (`all`, `none`, a list of ids, or empty to decide later); with `--yes` or without a terminal it installs nothing and lists the present checkouts with the `--repo ID` hint.
+- The first run of this version on a `repos.local.json` without `apply` creates it with the checkouts that already have their package installed (links to `Contexts/<package>/`, or the copy `init` made in `copy` mode): your configuration does not change.
+- An id that the registry no longer declares leaves `apply` with a warning. `--dry-run` shows the selection's changes (`would add`, `would remove`) without writing anything.
+- `apply` only decides where the packages are installed: the graph targets and the server read the registry without looking at it.
 
-- Para cada vault con `Contexts/config.json`, ubica cada raíz: `--root NOMBRE=DIR` (o `--root SLUG:NOMBRE=DIR` para un solo vault), tus variables `KNOWLEDGE_<RAÍZ>_ROOT`, tu `repos.local.json`, el `default` que sugiera el vault o, si nada de eso existe, los checkouts de git cuyo `origin` coincide con un remoto declarado bajo `~/Projects` (o bajo cada `--search-dir`). Si no encuentra una raíz te la pregunta; con `--yes` la salta.
-- Escribe `~/.config/knowledge/<slug>/repos.local.json` (bajo `$XDG_CONFIG_HOME` si la tienes definida), enlaza el paquete de cada aplicación seleccionada cuyo checkout tienes, reporta como `not-selected` los checkouts presentes que no seleccionaste y salta los que no tienes, sin error.
-- Termina diciendo dónde vive cada archivo: `vaults.yaml`, cada `repos.local.json` y cada checkout enlazado. Edítalos y vuelve a correr `init`: una segunda corrida sin cambios no escribe nada.
-- Solo instala en un checkout cuyo `origin` es el remoto declarado: si no se puede leer (sin remoto, sin `.git`) queda `unverified`, `init` sale con 1 y no instala salvo con `--force`; si es otro repositorio, es un error. El `path` de una aplicación nunca sale de su raíz (`..` es `E_CONTEXTS_INVALID`).
-- Nunca escribe dentro de un vault. Si un checkout ya tiene su propio `CLAUDE.md` o `.mcp.json` sin versionar (también un enlace simbólico tuyo), `init` no los toca y sale con 1: `--force` los aparta como `<nombre>.pre-ai-context.bak-<epoch>`, y una copia (modo `copy`) que se desvió del paquete se resincroniza con `--refresh`.
-- `link` es el único modo recomendado: el paquete vive en el vault y cada checkout lo ve tal cual. `copy` sigue funcionando para un vault que todavía lo declara, pero ningún caso lo exige.
-- Un `.claude` que en el checkout es un **directorio real** (Claude Code crea sus worktrees en `<checkout>/.claude/worktrees/` y no acepta un `.claude` enlazado) sigue siendo real: `init` enlaza dentro de él cada entrada del `.claude` del paquete (`agents`, `commands`, `skills`, `settings.json`…) y nunca toca lo que el paquete no trae (`settings.local.json`, `agent-memory/`, `worktrees/`). Una entrada real sin versionar es un conflicto que `--force` aparta dentro del mismo `.claude`; un enlace que `init` hizo hacia un vault que se movió se reenlaza solo. Las entradas de ignorado nombran cada enlace (`/.claude/agents`), nunca el directorio real.
-- Lo que el checkout **versiona en git** es suyo: un `CLAUDE.md` o `.mcp.json` versionado, o una entrada de `.claude/` versionada, se conserva con el aviso «owned by the checkout», sin conflicto y sin cambiar el código de salida. Un `.claude/<colección>/` versionado (por ejemplo `.claude/skills/` con una skill del repositorio) recibe además las entradas del paquete que le faltan; más abajo, una skill o un agente es una unidad y no se mezcla.
+- For each vault with `Contexts/config.json`, it locates each root: `--root NAME=DIR` (or `--root SLUG:NAME=DIR` for a single vault), your `KNOWLEDGE_<ROOT>_ROOT` variables, your `repos.local.json`, the `default` the vault suggests or, if none of those exists, the git checkouts whose `origin` matches a declared remote under `~/Projects` (or under each `--search-dir`). If it does not find a root it asks you; with `--yes` it skips it.
+- It writes `~/.config/knowledge/<slug>/repos.local.json` (under `$XDG_CONFIG_HOME` if you have it defined), links the package of each selected application whose checkout you have, reports as `not-selected` the present checkouts you did not select, and skips the ones you do not have, without error.
+- It ends by saying where each file lives: `vaults.yaml`, each `repos.local.json` and each linked checkout. Edit them and run `init` again: a second run with no changes writes nothing.
+- It installs only into a checkout whose `origin` is the declared remote: if it cannot be read (no remote, no `.git`) it is `unverified`, `init` exits with 1 and does not install unless you pass `--force`; if it is another repository, it is an error. An application's `path` never leaves its root (`..` is `E_CONTEXTS_INVALID`).
+- It never writes inside a vault. If a checkout already has its own unversioned `CLAUDE.md` or `.mcp.json` (also a symlink of yours), `init` does not touch them and exits with 1: `--force` sets them aside as `<name>.pre-ai-context.bak-<epoch>`, and a copy (`copy` mode) that drifted from the package is resynchronized with `--refresh`.
+- `link` is the only recommended mode: the package lives in the vault and each checkout sees it as is. `copy` still works for a vault that still declares it, but no case requires it.
+- A `.claude` that is a **real directory** in the checkout (Claude Code creates its worktrees in `<checkout>/.claude/worktrees/` and does not accept a linked `.claude`) stays real: `init` links inside it each entry of the package's `.claude` (`agents`, `commands`, `skills`, `settings.json`…) and never touches what the package does not ship (`settings.local.json`, `agent-memory/`, `worktrees/`). An unversioned real entry is a conflict that `--force` sets aside inside the same `.claude`; a link that `init` made to a vault that has since moved is relinked automatically. The ignore entries name each link (`/.claude/agents`), never the real directory.
+- What the checkout **versions in git** is its own: a versioned `CLAUDE.md` or `.mcp.json`, or a versioned `.claude/` entry, is kept with the warning "owned by the checkout", without conflict and without changing the exit code. A versioned `.claude/<collection>/` (for example `.claude/skills/` with a skill of the repository) also receives the package entries it lacks; further down, a skill or an agent is a unit and is not merged.
 
-`cloudfrog-knowledge` en estos ejemplos es cualquiera de las formas de «Instalar el CLI»: `knowledge`, `uvx … cloudfrog-knowledge` o `npx @cloudfrog/knowledge`.
+`cloudfrog-knowledge` in these examples is any of the forms in "Install the CLI": `knowledge`, `uvx … cloudfrog-knowledge` or `npx @cloudfrog/knowledge`.
 
-Un vault que no tiene aplicaciones que enlazar declara `"repos": {"roots": [], "entries": []}` (y `"graph": {"targets": []}`) en su `Contexts/config.json`: `init` lo reporta como `no-apps`, no escribe nada y sale 0, y `doctor` no lo cuenta como `init pending`. Un `roots` o `entries` que no sea un arreglo, o una entrada mal formada, sigue siendo `E_CONTEXTS_INVALID`; el registro vacío solo es válido en la declaración de un vault.
+A vault that has no applications to link declares `"repos": {"roots": [], "entries": []}` (and `"graph": {"targets": []}`) in its `Contexts/config.json`: `init` reports it as `no-apps`, writes nothing and exits 0, and `doctor` does not count it as `init pending`. A `roots` or `entries` that is not an array, or a malformed entry, is still `E_CONTEXTS_INVALID`; the empty registry is valid only in a vault's declaration.
 
-En modo `link`, Claude Code escribe en el vault a través del `.claude` enlazado (`settings.local.json`, `agent-memory/`, `worktrees/`): el `.gitignore` del vault tiene que cubrir `Contexts/*/.claude/settings.local.json`, `Contexts/*/.claude/agent-memory/` y `Contexts/*/.claude/worktrees/`. Si el vault es un repositorio git y no los cubre, `init` avisa con `W_CONTEXTS_GITIGNORE` (no bloquea).
+In `link` mode, Claude Code writes into the vault through the linked `.claude` (`settings.local.json`, `agent-memory/`, `worktrees/`): the vault's `.gitignore` has to cover `Contexts/*/.claude/settings.local.json`, `Contexts/*/.claude/agent-memory/` and `Contexts/*/.claude/worktrees/`. If the vault is a git repository and does not cover them, `init` warns with `W_CONTEXTS_GITIGNORE` (it does not block).
 
-Comprobación: `cloudfrog-knowledge doctor --brief` deja de decir `init pending for vault(s) …`, y el hook de inicio de sesión del plugin vuelve a callar.
+Check: `cloudfrog-knowledge doctor --brief` stops saying `init pending for vault(s) …`, and the plugin's session-start hook goes quiet again.
 
-En una máquina que consume un servidor remoto (sin índice, sin clave de embeddings, sin bearers propios), `cloudfrog-knowledge doctor --client` revisa solo lo tuyo: que el vault exista y se lea, que su `Contexts/config.json` cargue, tu `repos.local.json` y el estado de cada checkout (`init --dry-run`, sin escanear ni preguntar). Un checkout presente que no seleccionaste es `not-selected` (información, no un problema); uno seleccionado sin su paquete cuenta como `init` pendiente (código 0); uno con enlaces a su paquete que no está en `apply` es el aviso `W_CONTEXTS_LINKED_NOT_SELECTED` (código 0: agrégalo con `--repo ID` o quita sus enlaces con `--drop ID`), y un `repos.local.json` sin `apply` es el aviso `W_CONTEXTS_SELECTION_MISSING` (código 0: el próximo `init` la crea). Un checkout que es un repositorio git sin remoto `origin` es un aviso (`W_CONTEXTS_CHECKOUT_UNVERIFIED`, código 0); un conflicto (`E_CONTEXTS_CONFLICT`) o un checkout que no es el declarado (`E_CONTEXTS_CHECKOUT_INVALID`) sale con 1. `--brief` funciona igual.
+On a machine that consumes a remote server (no index, no embeddings key, no bearers of its own), `cloudfrog-knowledge doctor --client` checks only what is yours: that the vault exists and can be read, that its `Contexts/config.json` loads, your `repos.local.json` and the state of each checkout (`init --dry-run`, without scanning or prompting). A present checkout you did not select is `not-selected` (information, not a problem); a selected one without its package counts as `init` pending (code 0); one with links to its package that is not in `apply` is the warning `W_CONTEXTS_LINKED_NOT_SELECTED` (code 0: add it with `--repo ID` or remove its links with `--drop ID`), and a `repos.local.json` without `apply` is the warning `W_CONTEXTS_SELECTION_MISSING` (code 0: the next `init` creates it). A checkout that is a git repository without an `origin` remote is a warning (`W_CONTEXTS_CHECKOUT_UNVERIFIED`, code 0); a conflict (`E_CONTEXTS_CONFLICT`) or a checkout that is not the declared one (`E_CONTEXTS_CHECKOUT_INVALID`) exits with 1. `--brief` works the same.
 
-Un vault que envuelve `init` y `doctor` en sus propios scripts (por ejemplo `Contexts/scripts/init.sh` y `Contexts/scripts/doctor.sh`, que fijan la versión del paquete y el vault) fija en ellos `KNOWLEDGE_COMMAND_LABEL='Contexts/scripts/{command}.sh'`: las pistas de `init` y `doctor` nombran esos scripts y no este CLI. Ver el README, «Etiqueta del comando en las pistas».
+A vault that wraps `init` and `doctor` in its own scripts (for example `Contexts/scripts/init.sh` and `Contexts/scripts/doctor.sh`, which pin the package version and the vault) sets `KNOWLEDGE_COMMAND_LABEL='Contexts/scripts/{command}.sh'` in them: the hints of `init` and `doctor` then name those scripts and not this CLI. See the [README](../README.md), "Command label in hints".
 
-## Bearers y alcances de un despliegue HTTP
+## Bearers and scopes of an HTTP deployment
 
-Cada bearer de un despliegue HTTP tiene alcances: `read` usa el servidor y `admin` además puede llamar `reindex`, `sync_confluence` y `POST /webhook/reindex` con bearer manual. Un bearer sin `admin` recibe `E_SCOPE_REQUIRED` en esas tools (403 en el webhook); las demás responden igual. Por stdio no hay bearers y nada se comprueba.
+Each bearer of an HTTP deployment has scopes: `read` uses the server and `admin` can also call `reindex`, `sync_confluence` and `POST /webhook/reindex` with a manual bearer. A bearer without `admin` receives `E_SCOPE_REQUIRED` on those tools (403 on the webhook); the others respond the same. Over stdio there are no bearers and nothing is checked.
 
-| Variable o clave | Qué hace |
+| Variable or key | What it does |
 |---|---|
-| `MCP_API_KEY` | Sin `MCP_ADMIN_KEY`, tiene `read` y `admin`, igual que en 1.2.0. Con ella, solo `read`. |
-| `MCP_ADMIN_KEY` | Bearer con `read` y `admin`. Debe ser distinta de `MCP_API_KEY` (si coinciden, el arranque sale con `E_MANIFEST_INVALID`). |
-| `bearers` en `vaults.yaml` | Un bearer por persona (`id`, `token_env`, `scopes`); sustituye a `MCP_API_KEY` y `MCP_ADMIN_KEY`: con `bearers` declarado, esas dos variables se ignoran. Ver `docs/runbooks/servir-varios-vaults.md`, sección 5. |
+| `MCP_API_KEY` | Without `MCP_ADMIN_KEY`, it has `read` and `admin`, as in 1.2.0. With it, only `read`. |
+| `MCP_ADMIN_KEY` | Bearer with `read` and `admin`. It must differ from `MCP_API_KEY` (if they coincide, startup exits with `E_MANIFEST_INVALID`). |
+| `bearers` in `vaults.yaml` | One bearer per person (`id`, `token_env`, `scopes`); it replaces `MCP_API_KEY` and `MCP_ADMIN_KEY`: with `bearers` declared, those two variables are ignored. See [`runbooks/serve-multiple-vaults.md`](runbooks/serve-multiple-vaults.md), section 5. |
 
-El bearer que pones en `Configure` de `knowledge-remote` (o en `claude mcp add … -H 'Authorization: Bearer <bearer>'`) es de solo lectura salvo que quien administra el despliegue te dé uno con `admin`. `cloudfrog-knowledge doctor` muestra el bloque `auth` del servidor: ids, alcances y nombres de variables, nunca un token.
+The bearer you put in `Configure` of `knowledge-remote` (or in `claude mcp add … -H 'Authorization: Bearer <bearer>'`) is read-only unless whoever administers the deployment gives you one with `admin`. `cloudfrog-knowledge doctor` shows the server's `auth` block: ids, scopes and variable names, never a token.
 
-## Memory-bridge: publicar un vault en el memory local
+## Memory-bridge: publish a vault to the local memory
 
-Un vault que declara `memory-bridge` en `features` (y `memory.project` en su `vault.yaml`) publica su proyecto en el servidor de memory que corre en tu máquina: la card (`cloudfrog-knowledge memory-bridge sync --card`) y el índice de runbooks (`memory-bridge sync`, y cada `reindex` por stdio). Solo funciona por stdio: un despliegue HTTP no carga la extensión (`W_EXTENSION_UNAVAILABLE_HTTP`).
+A vault that declares `memory-bridge` in `features` (and `memory.project` in its `vault.yaml`) publishes its project to the memory server running on your machine: the card (`cloudfrog-knowledge memory-bridge sync --card`) and the runbook index (`memory-bridge sync`, and every `reindex` over stdio). It works only over stdio: an HTTP deployment does not load the extension (`W_EXTENSION_UNAVAILABLE_HTTP`).
 
-| Variable | Qué hace |
+| Variable | What it does |
 |---|---|
-| `KNOWLEDGE_MEMORY_URL` | Dónde escucha memory; por omisión `http://127.0.0.1:6366`. Solo `http` en loopback: otra URL se rechaza con `E_MEMORY_URL_NOT_LOOPBACK`. |
-| `MEMORY_HTTP_TOKEN` | El bearer que se envía en cada escritura. Sin él no se escribe nada (`E_MEMORY_TOKEN_MISSING`). |
-| `KNOWLEDGE_MEMORY_REQUIRE_TOKEN` | Con exactamente `0`, las escrituras salen sin bearer. |
-| `MEMORY_BIN` | El binario que corre `memory-bridge promote`; por omisión, `memory` en el `PATH`. |
+| `KNOWLEDGE_MEMORY_URL` | Where memory listens; `http://127.0.0.1:6366` by default. Only `http` on loopback: any other URL is rejected with `E_MEMORY_URL_NOT_LOOPBACK`. |
+| `MEMORY_HTTP_TOKEN` | The bearer sent with every write. Without it nothing is written (`E_MEMORY_TOKEN_MISSING`). |
+| `KNOWLEDGE_MEMORY_REQUIRE_TOKEN` | With exactly `0`, writes go out without a bearer. |
+| `MEMORY_BIN` | The binary that `memory-bridge promote` runs; by default, `memory` on the `PATH`. |
 
-Excepción local: el `memory serve` de una persona corre hoy sin `MEMORY_HTTP_TOKEN` (las integraciones de opencode, pi y obsidian todavía no envían bearer), así que su `requireAuth` acepta escrituras sin él. Para ese memory, activa el bridge con `KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0` en el entorno del servidor knowledge, nunca en un despliegue:
+Local exception: a person's `memory serve` currently runs without `MEMORY_HTTP_TOKEN` (the opencode, pi and obsidian integrations do not send a bearer yet), so its `requireAuth` accepts writes without it. For that memory, enable the bridge with `KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0` in the knowledge server's environment, never in a deployment:
 
 ```bash
 KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0 uv run cloudfrog-knowledge memory-bridge sync --vault acme --card
 ```
 
-El servidor stdio también lee esa variable: sin ella y sin `MEMORY_HTTP_TOKEN`, arranca con `W_EXTENSION_UNCONFIGURED` para `memory-bridge`. Cuando `memory serve` corra con token, exporta el mismo `MEMORY_HTTP_TOKEN` en los dos procesos y quita la excepción.
+The stdio server also reads that variable: without it and without `MEMORY_HTTP_TOKEN`, it starts with `W_EXTENSION_UNCONFIGURED` for `memory-bridge`. When `memory serve` runs with a token, export the same `MEMORY_HTTP_TOKEN` in both processes and remove the exception.
 
-Comprobación: `curl -s http://127.0.0.1:6366/projects/<memory.project>/runbooks | jq '.total'` cuenta los runbooks que memory indexó.
+Check: `curl -s http://127.0.0.1:6366/projects/<memory.project>/runbooks | jq '.total'` counts the runbooks memory indexed.
 
-## Jira: issues como tareas de memory
+## Jira: issues as memory tasks
 
-Un vault que declara `jira` en `features`, con `memory.project` e `integrations.jira` en su `vault.yaml`, copia los issues de sus proyectos de Jira como tareas de su proyecto en el memory local, una por issue y por `jira_key`. Solo por stdio: un despliegue HTTP no carga la extensión (`W_EXTENSION_UNAVAILABLE_HTTP`) y `sync_jira` no aparece en su catálogo.
+A vault that declares `jira` in `features`, with `memory.project` and `integrations.jira` in its `vault.yaml`, copies the issues of its Jira projects as tasks of its project in the local memory, one per issue and per `jira_key`. Over stdio only: an HTTP deployment does not load the extension (`W_EXTENSION_UNAVAILABLE_HTTP`) and `sync_jira` does not appear in its catalog.
 
-Solo los vaults que lo declaran sincronizan Jira: sin el bloque, el vault no entra en `jira sync --auto` ni en `sync_jira`. Para activarlo en un vault, en un PR de ese vault:
+Only the vaults that declare it sync Jira: without the block, the vault does not enter `jira sync --auto` or `sync_jira`. To enable it on a vault, in a PR of that vault:
 
-1. añade `jira` a `features`, `memory.project` e `integrations.jira` (`site`, `projects` y `secrets`) a su `vault.yaml`, con los nombres de variable del propio vault: `<SLUG>_JIRA_EMAIL` y `<SLUG>_JIRA_TOKEN`;
-2. exporta esas dos variables en el entorno de tu sesión (el correo de tu cuenta de Jira y un API token suyo).
+1. add `jira` to `features`, `memory.project` and `integrations.jira` (`site`, `projects` and `secrets`) to its `vault.yaml`, with the vault's own variable names: `<SLUG>_JIRA_EMAIL` and `<SLUG>_JIRA_TOKEN`;
+2. export those two variables in your session environment (your Jira account's email and an API token for it).
 
 ```yaml
 features: [jira, memory-bridge]
@@ -163,13 +163,13 @@ integrations:
     secrets: {email_env: ACME_JIRA_EMAIL, token_env: ACME_JIRA_TOKEN}
 ```
 
-| Variable | Qué hace |
+| Variable | What it does |
 |---|---|
-| `<PREFIJO>_JIRA_EMAIL` / `<PREFIJO>_JIRA_TOKEN` | El correo de tu cuenta de Jira y un API token suyo (id.atlassian.com → Security → API tokens), con los nombres que declara `integrations.jira.secrets`. Exportados en el entorno de tu sesión, nunca en un archivo del repo. Sin ellas, el servidor stdio arranca con `W_EXTENSION_UNCONFIGURED` y `sync_jira` responde `E_SECRET_MISSING` con sus nombres. |
-| `MEMORY_HTTP_TOKEN` / `KNOWLEDGE_MEMORY_REQUIRE_TOKEN` | Las mismas del memory-bridge: la escritura de tareas exige el bearer salvo `KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0` para el memory local sin token. Un `--dry-run` no los necesita. |
-| `KNOWLEDGE_JIRA_AUTOSYNC` | Con `0`, el hook de sesión del plugin no lanza la sincronización en segundo plano. |
+| `<PREFIX>_JIRA_EMAIL` / `<PREFIX>_JIRA_TOKEN` | Your Jira account's email and an API token for it (id.atlassian.com → Security → API tokens), with the names declared by `integrations.jira.secrets`. Exported in your session environment, never in a file of the repo. Without them, the stdio server starts with `W_EXTENSION_UNCONFIGURED` and `sync_jira` responds `E_SECRET_MISSING` with their names. |
+| `MEMORY_HTTP_TOKEN` / `KNOWLEDGE_MEMORY_REQUIRE_TOKEN` | The same as for the memory-bridge: writing tasks requires the bearer unless `KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0` for the local memory without a token. A `--dry-run` does not need them. |
+| `KNOWLEDGE_JIRA_AUTOSYNC` | With `0`, the plugin's session hook does not launch the background sync. |
 
-Antes de la primera corrida, crea la card del proyecto con su `jira_project` (sin ella, memory crea una card mínima con un `jira_project` de relleno):
+Before the first run, create the project card with its `jira_project` (without it, memory creates a minimal card with a placeholder `jira_project`):
 
 ```bash
 KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0 uv run cloudfrog-knowledge memory-bridge sync --vault acme --card
@@ -177,78 +177,78 @@ uv run cloudfrog-knowledge jira sync --vault acme --dry-run --since -30d
 KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0 uv run cloudfrog-knowledge jira sync --vault acme
 ```
 
-Con el plugin, cada sesión que arranca con `doctor` sano lanza `cloudfrog-knowledge jira sync --auto` en segundo plano, desprendido del hook: sincroniza los vaults que declaran `jira`, tienen sus variables exportadas y ya cumplieron `integrations.jira.sync.throttle_minutes` (60 por omisión). El procedimiento completo, la forma del reporte y qué hacer con cada código están en `docs/runbooks/sincronizar-jira.md`.
+With the plugin, every session that starts with a healthy `doctor` launches `cloudfrog-knowledge jira sync --auto` in the background, detached from the hook: it syncs the vaults that declare `jira`, have their variables exported and have already met `integrations.jira.sync.throttle_minutes` (60 by default). The full procedure, the report's shape and what to do with each code are in [`runbooks/sync-jira.md`](runbooks/sync-jira.md).
 
-## Juez de `search` (rerank)
+## `search` judge (rerank)
 
-Un vault que declara un bloque `rerank` en su `vault.yaml` reordena los resultados de `search` con un juez: Jev, de TypeSafe (`provider: jev`), o Kev, un servidor local en loopback (`provider: kev`). El bloque es contenido curado y entra por PR humano; nombra la variable de la clave, nunca la clave:
+A vault that declares a `rerank` block in its `vault.yaml` reorders the `search` results with a judge: Jev, from TypeSafe (`provider: jev`), or Kev, a local server on loopback (`provider: kev`). The block is curated content and enters through a human PR; it names the key's variable, never the key:
 
 ```yaml
 rerank:
   provider: jev
-  default: on                    # search reordena sin que el llamador lo pida; off: solo con rerank="on"
-  model: jev-1.13.0              # versión fija: jev-latest se rechaza
-  key_env: ACME_TYPESAFE_API_KEY    # TYPESAFE_API_KEY solo en el vault por defecto
-  candidates: 10                 # documentos que lee el juez, 1-12
-  units_per_doc: 2               # bloques por documento, 1-3
+  default: on                    # search reorders without the caller asking; off: only with rerank="on"
+  model: jev-1.13.0              # pinned version: jev-latest is rejected
+  key_env: ACME_TYPESAFE_API_KEY    # TYPESAFE_API_KEY only in the default vault
+  candidates: 10                 # documents the judge reads, 1-12
+  units_per_doc: 2               # blocks per document, 1-3
   timeout_ms: 1500
   max_input_tokens: 20000
-  max_usd_per_day: 1.00          # tope por vault y por día; 0 sin tope
+  max_usd_per_day: 1.00          # cap per vault per day; 0 means no cap
   conditional_gap: null
-  never_send: []                 # prefijos de ruta que nunca salen de la máquina, p. ej. ["Personal/"]
+  never_send: []                 # path prefixes that never leave the machine, e.g. ["Personal/"]
 ```
 
-| Variable | Qué es |
+| Variable | What it is |
 |---|---|
-| `TYPESAFE_API_KEY` / `<PREFIJO>_TYPESAFE_API_KEY` | La clave de TypeSafe, con el nombre que declara `rerank.key_env`. Exportada en el entorno de la sesión (o del servicio en Dokploy), nunca en un archivo del repo. Abierto desde el Dock, Claude Code no hereda tu shell: hace falta `launchctl setenv`. Sin ella el servidor arranca igual, por stdio y por HTTP, con `W_RERANK_KEY_MISSING`, y ese vault busca sin juez. |
-| `KNOWLEDGE_RERANK` | `off` apaga el juez de todos los vaults del proceso. |
-| `KNOWLEDGE_RERANK_PROVIDERS` | Proveedores permitidos (`jev,kev` por omisión). |
-| `KNOWLEDGE_RERANK_BASE_URL` | Reemplaza la URL de todo juez: `https://api.typesafe.ai` o un `http` en loopback. |
-| `KNOWLEDGE_RERANK_TIMEOUT_MS` | Plazo total de cada llamada al juez (200 a 60.000 ms). |
+| `TYPESAFE_API_KEY` / `<PREFIX>_TYPESAFE_API_KEY` | The TypeSafe key, with the name declared by `rerank.key_env`. Exported in the session environment (or the deployment platform's service environment), never in a file of the repo. Opened from the Dock, Claude Code does not inherit your shell: you need `launchctl setenv`. Without it the server starts anyway, over stdio and over HTTP, with `W_RERANK_KEY_MISSING`, and that vault searches without a judge. |
+| `KNOWLEDGE_RERANK` | `off` turns the judge off for every vault in the process. |
+| `KNOWLEDGE_RERANK_PROVIDERS` | Allowed providers (`jev,kev` by default). |
+| `KNOWLEDGE_RERANK_BASE_URL` | Replaces every judge's URL: `https://api.typesafe.ai` or an `http` on loopback. |
+| `KNOWLEDGE_RERANK_TIMEOUT_MS` | Total deadline of each judge call (200 to 60,000 ms). |
 
-Un vault que declara el juez nombra en su `vault.yaml` una variable con el prefijo de su slug, válida sea o no el vault por defecto del proceso. Para que busque con juez, exporta en el entorno de la sesión (o del servicio) esa variable; varios vaults pueden llevar la misma clave bajo nombres distintos. En fish: `set -Ux ACME_TYPESAFE_API_KEY $TYPESAFE_API_KEY`. Cómo llega la clave a cada despliegue se documenta en su vault, en `Deploy/`.
+A vault that declares the judge names in its `vault.yaml` a variable with its slug as prefix, valid whether or not the vault is the process's default. For it to search with a judge, export that variable in the session (or service) environment; several vaults can carry the same key under different names. In fish: `set -Ux ACME_TYPESAFE_API_KEY $TYPESAFE_API_KEY`. How the key reaches each deployment is documented in its vault, under `Deploy/`.
 
-Costo: unos 11.700 tokens de entrada por búsqueda reordenada a 0,042 USD por millón, ≈0,0005 USD; 1.000 búsquedas ≈0,49 USD. Las consultas repetidas salen de la caché del proceso sin costo. El contenido viaja a `api.typesafe.ai` solo desde un vault que declara `jev`, nunca desde `90 - Memory/` ni con `include_memories=true`.
+Cost: about 11,700 input tokens per reranked search at 0.042 USD per million, ≈0.0005 USD; 1,000 searches ≈0.49 USD. Repeated queries come from the process cache at no cost. Content travels to `api.typesafe.ai` only from a vault that declares `jev`, never from `90 - Memory/` or with `include_memories=true`.
 
-Comprobación: `cloudfrog-knowledge doctor` muestra por vault un bloque `rerank` con `key: ok` (o `missing:<VARIABLE>`), y `doctor --brief` termina en `rerank <slug>:jev/on`. Una `search` reordenada trae `rerank_score` en sus filas y `_meta["knowledge/rerank"].applied: true`.
+Check: `cloudfrog-knowledge doctor` shows a `rerank` block per vault with `key: ok` (or `missing:<VARIABLE>`), and `doctor --brief` ends in `rerank <slug>:jev/on`. A reranked `search` carries `rerank_score` in its rows and `_meta["knowledge/rerank"].applied: true`.
 
-## Con el plugin `cloudfrog@cloudfrog` instalado
+## With the `cloudfrog@cloudfrog` plugin installed
 
-El plugin de memory se llama `memory@cloudfroghq` y sus tools llevan el prefijo `mcp__plugin_memory_memory__`, el único que listan los `allowed-tools` de las skills de este repositorio y de sus paquetes de contexto. El plugin viejo `cloudfrog@cloudfrog` (id `cloudfrog:memory`) las expone con el prefijo retirado `mcp__plugin_cloudfrog_memory__`: en una máquina que lo conserve, esas skills siguen funcionando, pero cada llamada a memory pide permiso, salvo que `~/.claude/settings.json` todavía permita las entradas viejas. Migrar es lo recomendado; el comando de abajo deja instalado `memory@cloudfroghq`.
+The memory plugin is called `memory@cloudfroghq` and its tools carry the prefix `mcp__plugin_memory_memory__`, the only one listed in the `allowed-tools` of this repository's skills and its context packages. The old plugin `cloudfrog@cloudfrog` (id `cloudfrog:memory`) exposes them with the retired prefix `mcp__plugin_cloudfrog_memory__`: on a machine that keeps it, those skills keep working, but every call to memory asks for permission, unless `~/.claude/settings.json` still allows the old entries. Migrating is recommended; the command below leaves `memory@cloudfroghq` installed.
 
 ```bash
 claude plugin uninstall cloudfrog@cloudfrog && claude plugin marketplace remove cloudfrog && claude plugin marketplace add cloudfroghq/claude-plugins && claude plugin install memory@cloudfroghq --scope user && memory setup claude-code
 ```
 
-`marketplace remove` borra también las opciones guardadas del plugin `cloudfrog@cloudfrog`: revisa con `claude plugin configure memory@cloudfroghq` cuáles quedaron sin valor. Después quita a mano de `permissions.allow` en `~/.claude/settings.json` las entradas `mcp__plugin_cloudfrog_memory__*`, que ya no corresponden a ninguna tool.
+`marketplace remove` also deletes the saved options of the `cloudfrog@cloudfrog` plugin: check with `claude plugin configure memory@cloudfroghq` which ones were left without a value. Then remove by hand from `permissions.allow` in `~/.claude/settings.json` the `mcp__plugin_cloudfrog_memory__*` entries, which no longer correspond to any tool.
 
-## Revisar un vault para su PR
+## Check a vault for its PR
 
-`cloudfrog-knowledge vault-lint <ruta-al-vault>` revisa un vault sin escribir nada. Con las reglas `1.3` (las de por omisión) exige un `last_updated` ISO en cada nota, avisa de un `type` fuera del conjunto cerrado, rechaza un `scope` que no sea el `slug` del vault, `global` ni uno de los `scopes:` de su `vault.yaml`, exige rutas NFC sin choques de mayúsculas, comprueba que cada runbook (`type: runbook` bajo `Runbooks/`, o el `runbooks.dir` del manifiesto) pueda indexarlo el servidor de memory, y no cuenta como wikilink lo que está dentro de código. `--rules 1.2` aplica solo lo que cuenta `reindex.validation`. El `index.exclude` del manifiesto saca archivos de la regla de stems repetidos, de los enlaces de origen y de las reglas de frontmatter (`last_updated`, `type`, `scope`): es lo que permite que `Contexts/*/CLAUDE.md`, que no son notas, no necesiten frontmatter (`index: {exclude: ["Contexts/**"]}`). Las reglas `1.2` no leen el manifiesto.
+`cloudfrog-knowledge vault-lint <path-to-vault>` checks a vault without writing anything. With the `1.3` rules (the default) it requires an ISO `last_updated` on every note, warns about a `type` outside the closed set, rejects a `scope` that is not the vault's `slug`, `global` or one of the `scopes:` in its `vault.yaml`, requires NFC paths without case collisions, checks that every runbook (`type: runbook` under `Runbooks/`, or the manifest's `runbooks.dir`) can be indexed by the memory server, and does not count as a wikilink anything inside code. `--rules 1.2` applies only what `reindex.validation` counts. The manifest's `index.exclude` takes files out of the repeated-stem rule, the source links and the frontmatter rules (`last_updated`, `type`, `scope`): it is what lets `Contexts/*/CLAUDE.md`, which are not notes, need no frontmatter (`index: {exclude: ["Contexts/**"]}`). The `1.2` rules do not read the manifest.
 
-`--fix` escribe, y nunca en un vault que esta instalación sirve (`KNOWLEDGE_VAULTS`, tu `vaults.yaml` o `VAULT_PATH`): sobre uno sale con código 2 y `E_WRITE_FENCED` sin tocar nada. Copia el vault con su `.git`, corre `--fix` en la copia y entrega el cambio por PR del vault. `--out DIR` hace la copia por ti (sin `.git`, para comparar con `diff -ru`).
+`--fix` writes, and never in a vault this installation serves (`KNOWLEDGE_VAULTS`, your `vaults.yaml` or `VAULT_PATH`): on one it exits with code 2 and `E_WRITE_FENCED` without touching anything. Copy the vault with its `.git`, run `--fix` on the copy and deliver the change through a vault PR. `--out DIR` makes the copy for you (without `.git`, to compare with `diff -ru`).
 
 ```bash
-cp -R <ruta-al-vault> /tmp/vault-fix && cd /tmp/vault-fix
+cp -R <path-to-vault> /tmp/vault-fix && cd /tmp/vault-fix
 cloudfrog-knowledge vault-lint . --fix > /tmp/vault-fix.json   # fixed, remaining, errors, warnings
-git diff > /tmp/vault-fix.patch                                # solo líneas del frontmatter
+git diff > /tmp/vault-fix.patch                                # frontmatter lines only
 ```
 
-`--fix` toma la fecha de `updated`, `last_review` o `last_verified.date` (en ese orden) y la deja como `last_updated`; el resto de un mapa `last_verified` queda como `verified_against`. Lo que no tiene una fecha de la cual partir sale en `remaining` con su motivo y se escribe a mano.
+`--fix` takes the date from `updated`, `last_review` or `last_verified.date` (in that order) and sets it as `last_updated`; the rest of a `last_verified` map is kept as `verified_against`. Whatever has no date to start from comes out in `remaining` with its reason and is written by hand.
 
-## Actualizar
+## Update
 
 ```bash
 claude plugin marketplace update cloudfroghq && claude plugin update memory@cloudfroghq && claude plugin update knowledge@cloudfroghq
 ```
 
-Con `knowledge-remote`, actualiza `knowledge-remote@cloudfroghq` en lugar de `knowledge@cloudfroghq`. Después, `/reload-plugins` dentro de la sesión, y `brew upgrade memory` para el binario.
+With `knowledge-remote`, update `knowledge-remote@cloudfroghq` instead of `knowledge@cloudfroghq`. Then `/reload-plugins` inside the session, and `brew upgrade memory` for the binary.
 
-## Diagnóstico
+## Diagnostics
 
-- `knowledge` (stdio): `uvx --managed-python --python 3.12 --from 'git+https://github.com/cloudfroghq/knowledge.git@v0.9.0' cloudfrog-knowledge doctor` imprime un JSON con la regla que eligió el registro de vaults, el estado de cada vault (directorio, proveedor, si la clave está definida sin mostrarla, si hay índice), si `KNOWLEDGE_HOME` se puede escribir y las versiones del paquete y del contrato. El hook de inicio de sesión del plugin corre la versión breve y solo habla cuando algo falla, con una línea de hasta 200 bytes sin contar el salto de línea (el tope de `doctor --brief`).
-- Si un vault declara en `features` una extensión sin sus credenciales (por ejemplo `confluence` sin `CONFLUENCE_EMAIL` y `CONFLUENCE_TOKEN`, o los nombres que fije `integrations.confluence.secrets` en su `vault.yaml`), el servidor stdio arranca igual y deja `W_EXTENSION_UNCONFIGURED` en su log con los nombres de las variables que faltan; solo esa extensión responde con error.
-- `CONFLUENCE_URL` es la raíz del sitio de Atlassian (`https://<org>.atlassian.net`), **sin** `/wiki`: el cliente de este servidor añade `/wiki/api/v2/...` por su cuenta. Con `/wiki` al final cada página responde 404 y `sync_confluence` y `confluence export` las cuentan todas en `errors`. La misma regla se aplica a `integrations.confluence.site` del `vault.yaml`. El `CONFLUENCE_URL` de `mcp-atlassian` es otra variable, de otro proceso, y ese sí lleva `/wiki`.
-- Un servidor en estado `failed` en `/mcp` con el doctor en verde suele ser tiempo de arranque: sube `MCP_TIMEOUT` o vuelve a precalentar la caché.
-- Sin red, el servidor stdio no arranca: `uvx` consulta el tag en GitHub en cada inicio.
-- Si `uvx` no logra ni arrancar el paquete (sin red, o un tag que el remoto no tiene), el doctor no llega a decir nada y el hook lo avisa con `knowledge: server package failed (uvx rc N); diagnose: …` **una vez por día y por versión del plugin**, no en cada arranque. La marca es un archivo de una línea, `${XDG_CACHE_HOME:-$HOME/.cache}/knowledge/session-start-package-failed`: borrarlo hace que el aviso vuelva en el siguiente arranque, y si no se puede escribir el aviso sale en todos. Entre un aviso y otro el servidor sigue apareciendo como `failed` en `/mcp`. Reintentar con `uvx --offline` no ayuda: con uv 0.10 un tag git se consulta en el remoto incluso con esa bandera. Un doctor que no contesta en 8 segundos (caché fría) no avisa; lo hará el arranque siguiente.
+- `knowledge` (stdio): `uvx --managed-python --python 3.12 --from 'git+https://github.com/cloudfroghq/knowledge.git@vX.Y.Z' cloudfrog-knowledge doctor` prints JSON with the rule the vault registry chose, the state of each vault (directory, provider, whether the key is defined without showing it, whether there is an index), whether `KNOWLEDGE_HOME` is writable, and the package and contract versions. The plugin's session-start hook runs the brief version and speaks only when something fails, with a line of up to 200 bytes not counting the newline (the cap of `doctor --brief`).
+- If a vault declares in `features` an extension without its credentials (for example `confluence` without `CONFLUENCE_EMAIL` and `CONFLUENCE_TOKEN`, or the names set by `integrations.confluence.secrets` in its `vault.yaml`), the stdio server starts anyway and leaves `W_EXTENSION_UNCONFIGURED` in its log with the names of the missing variables; only that extension responds with an error.
+- `CONFLUENCE_URL` is the root of the Atlassian site (`https://<org>.atlassian.net`), **without** `/wiki`: this server's client appends `/wiki/api/v2/...` on its own. With a trailing `/wiki` every page responds 404 and `sync_confluence` and `confluence export` count them all in `errors`. The same rule applies to `integrations.confluence.site` in `vault.yaml`. The `CONFLUENCE_URL` of `mcp-atlassian` is a different variable, of a different process, and that one does take `/wiki`.
+- A server in `failed` state in `/mcp` with a green doctor is usually startup time: raise `MCP_TIMEOUT` or warm up the cache again.
+- Without a network, the stdio server does not start: `uvx` queries the tag on GitHub at every start.
+- If `uvx` cannot even start the package (no network, or a tag the remote does not have), the doctor never gets to say anything and the hook reports it with `knowledge: server package failed (uvx rc N); diagnose: …` **once per day and per plugin version**, not on every start. The marker is a one-line file, `${XDG_CACHE_HOME:-$HOME/.cache}/knowledge/session-start-package-failed`: deleting it makes the warning come back on the next start, and if it cannot be written the warning appears every time. Between one warning and the next the server keeps showing as `failed` in `/mcp`. Retrying with `uvx --offline` does not help: with uv 0.10 a git tag is queried on the remote even with that flag. A doctor that does not answer within 8 seconds (cold cache) does not warn; the next start will.

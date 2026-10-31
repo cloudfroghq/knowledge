@@ -25,7 +25,6 @@ from knowledge.settings import load_settings, parse_vaults_file, read_vault_mani
 ROOT = Path(__file__).resolve().parent.parent
 INFRA = ROOT / "infra"
 BOOTSTRAP = INFRA / "bootstrap-vault.sh"
-LIVE_COMPOSE = INFRA / "dokploy-compose.yml"
 GENERIC = INFRA / "compose.yml"
 
 SECRET_NAME = re.compile(r"(KEY|SECRET|TOKEN|PASSWORD)", re.IGNORECASE)
@@ -78,51 +77,6 @@ def test_dockerfile_puts_the_data_root_under_data_index() -> None:
     assert "mkdir -p /data/index" in text
 
 
-def _index_mounts(service: dict[str, Any]) -> tuple[str, list[str], list[str]]:
-    env = {k: str(v) for k, v in service["environment"].items()}
-    mounts = [str(m) for m in service["volumes"]]
-    index = [m for m in mounts if m.split(":")[1] == "/data/index"]
-    chroma = [m for m in mounts if m.split(":")[1] == "/data/chroma"]
-    return env.get("KNOWLEDGE_INDEX_DIR", ""), index, chroma
-
-
-def test_the_live_compose_keeps_the_index_in_its_own_volume() -> None:
-    """The index lives under ``/data/index`` on a named volume; Chroma's stays only as the source.
-
-    ``KNOWLEDGE_INDEX_DIR`` has to be set: the image keeps ``CHROMA_PERSIST_DIR``,
-    and without the explicit directory the index would land in the Chroma volume.
-    """
-    doc = _load(LIVE_COMPOSE)
-    index_dir, index, chroma = _index_mounts(doc["services"]["knowledge-mcp"])
-    assert index_dir.startswith("/data/index/"), "KNOWLEDGE_INDEX_DIR must be under /data/index"
-    assert len(index) == 1, "one volume mounted at /data/index"
-    volume = index[0].split(":")[0]
-    assert volume in doc.get("volumes", {}), "/data/index must be a named volume"
-    assert len(chroma) == 1, "the Chroma volume stays mounted as the migration source"
-
-
-def test_the_live_compose_serves_a_vault_repository_with_no_config_json() -> None:
-    """The deployed compose clones a vault repository and serves its root, with no config.json mounted.
-
-    The review thresholds come from the vault.yaml at the root of that clone,
-    so the compose names no KNOWLEDGE_CONFIG_JSON. The clone lives in a volume
-    of its own, never the one that held the clone of this code repository. The
-    file is the live deployment's wiring until the generic compose replaces it,
-    and this case goes with it.
-    """
-    compose = _load(LIVE_COMPOSE)
-    service = compose["services"]["knowledge-mcp"]
-    env = {k: str(v) for k, v in service["environment"].items()}
-    assert env["VAULT_REMOTE"] == "git@github.com:cloudfroghq/vault.git"
-    assert env["VAULT_PATH"] == "/data/vault-repo"
-    assert "KNOWLEDGE_CONFIG_JSON" not in env
-    for name in ("MCP_API_KEY", "MCP_ADMIN_KEY", "MCP_WEBHOOK_SECRET", "GIT_DEPLOY_KEY_B64"):
-        assert PLACEHOLDER.fullmatch(env[name]), f"{name} must be a ${{NAME}} placeholder"
-    assert "vault-cloudfrog:/data/vault-repo" in service["volumes"]
-    assert "vault-cloudfrog" in compose["volumes"]
-    assert "vault-repo" not in compose["volumes"]
-
-
 def test_vault_thresholds_come_from_the_vault_manifest(tmp_path: Path) -> None:
     """Without KNOWLEDGE_CONFIG_JSON, a vault.yaml at the vault root sets the thresholds.
 
@@ -146,7 +100,7 @@ def test_bootstrap_is_executable() -> None:
     assert BOOTSTRAP.stat().st_mode & stat.S_IXUSR
 
 
-@pytest.mark.parametrize("path", [GENERIC, LIVE_COMPOSE], ids=lambda p: p.name)
+@pytest.mark.parametrize("path", [GENERIC], ids=lambda p: p.name)
 def test_compose_parses(path: Path) -> None:
     assert "services" in _load_compose(path)
 
@@ -264,7 +218,7 @@ def test_example_manifest_parses() -> None:
 
 
 def test_runbook_names_every_error_code() -> None:
-    runbook = (ROOT / "docs" / "runbooks" / "servir-varios-vaults.md").read_text()
+    runbook = (ROOT / "docs" / "runbooks" / "serve-multiple-vaults.md").read_text()
     codes = {v for k, v in vars(errors).items() if k.startswith("E_") and isinstance(v, str)}
     codes.add("E_DEPLOY_KEY_MISSING")
     missing = sorted(c for c in codes if c not in runbook)
@@ -272,7 +226,7 @@ def test_runbook_names_every_error_code() -> None:
 
 
 def test_runbook_documents_the_generic_compose_and_its_entrypoint_codes() -> None:
-    runbook = (ROOT / "docs" / "runbooks" / "servir-varios-vaults.md").read_text()
+    runbook = (ROOT / "docs" / "runbooks" / "serve-multiple-vaults.md").read_text()
     for name in (
         "infra/compose.yml",
         "KNOWLEDGE_VAULTS_YAML",

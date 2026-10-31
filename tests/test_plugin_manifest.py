@@ -192,7 +192,7 @@ def test_search_first_teaches_the_pointer_protocol() -> None:
     assert 'search(query="$ARGUMENTS")\n' in body
     assert "get_document(chunk_id=<chunk_id>)\n" in body
     assert "fields=" not in body and "max_chars=2000" not in body
-    assert "`search_code` se retiró" in body and "full_metadata=true" in body
+    assert "`search_code` was retired" in body and "full_metadata=true" in body
 
 
 def test_search_first_explains_the_rerank_of_the_vault() -> None:
@@ -207,9 +207,9 @@ def test_code_question_runs_jg_on_a_narrow_root_with_a_byte_cap_and_never_on_a_v
     body = path.read_text(encoding="utf-8")
     tools = [t.strip() for t in meta["allowed-tools"].split(",")]
     assert "Bash(jg:*)" in tools
-    assert 'jg "$ARGUMENTS" <carpeta estrecha> --max-source-bytes 20000' in body
-    assert "## Nunca sobre un vault" in body
-    assert "jg auth" in body and "Nunca pidas una clave en el chat" in body
+    assert 'jg "$ARGUMENTS" <narrow folder> --max-source-bytes 20000' in body
+    assert "## Never over a vault" in body
+    assert "jg auth" in body and "Never ask for a key in the chat" in body
 
 
 def test_the_plugin_skills_carry_no_team_specifics() -> None:

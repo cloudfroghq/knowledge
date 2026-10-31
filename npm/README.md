@@ -1,6 +1,6 @@
 # @cloudfrog/knowledge
 
-El servidor MCP de conocimiento curado de CloudFrog (`cloudfrog-knowledge`) y sus herramientas de vault (`doctor`, `init`, `vault-lint`, …), para quien prefiere instalar con npm. El paquete no trae Python: en la primera corrida descarga una versión fija de [`uv`](https://github.com/astral-sh/uv), verifica su SHA-256 contra la suma que viene dentro del paquete y con ese `uv` corre la misma versión de `cloudfrog-knowledge` publicada en PyPI.
+CloudFrog's curated-knowledge MCP server (`cloudfrog-knowledge`) and its vault tooling (`doctor`, `init`, `vault-lint`, ...), for people who prefer to install with npm. The package ships no Python: on the first run it downloads a pinned version of [`uv`](https://github.com/astral-sh/uv), checks its SHA-256 against the checksum bundled in the package, and uses that `uv` to run the release of `cloudfrog-knowledge` published on PyPI with the same version as this package.
 
 ```bash
 npx @cloudfrog/knowledge --version
@@ -8,19 +8,21 @@ pnpm dlx @cloudfrog/knowledge doctor
 npm install -g @cloudfrog/knowledge && knowledge doctor
 ```
 
-Los dos comandos, `knowledge` y `cloudfrog-knowledge`, son el mismo programa. Sin subcomando equivale a `serve`, el servidor MCP por stdio.
+The two commands, `knowledge` and `cloudfrog-knowledge`, are the same program. With no subcommand it runs `serve`, the MCP server over stdio. Requires Node.js 18 or later; the package has no npm dependencies.
 
-## Tres formas de instalarlo
+## Three ways to install it
 
-| Canal | Una vez | Cada uso |
+| Channel | Once | Each use |
 |---|---|---|
-| PyPI con `uv` | `uv tool install --managed-python --python 3.12 cloudfrog-knowledge` | `knowledge …` (o sin instalar: `uvx --managed-python --python 3.12 cloudfrog-knowledge …`) |
-| npm (este paquete) | `npm install -g @cloudfrog/knowledge` | `knowledge …` (o sin instalar: `npx @cloudfrog/knowledge …`, `pnpm dlx @cloudfrog/knowledge …`) |
-| Tag de git | — | `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@v0.9.0 cloudfrog-knowledge …` |
+| PyPI with `uv` | `uv tool install --managed-python --python 3.12 cloudfrog-knowledge` | `knowledge ...` (or without installing: `uvx --managed-python --python 3.12 cloudfrog-knowledge ...`) |
+| npm (this package) | `npm install -g @cloudfrog/knowledge` | `knowledge ...` (or without installing: `npx @cloudfrog/knowledge ...`, `pnpm dlx @cloudfrog/knowledge ...`) |
+| Git tag | | `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@vX.Y.Z cloudfrog-knowledge ...` |
 
-Las tres corren el mismo código: la versión de este paquete es la de PyPI y la del tag. `--python 3.12` importa porque `uv` ignora el tope de `requires-python` al elegir intérprete; este paquete lo pasa siempre. La guía completa, con el plugin de Claude Code y los vaults, está en [`docs/install.md`](https://github.com/cloudfroghq/knowledge/blob/main/docs/install.md).
+All three run the same code: this package's version is the PyPI version and the tag (`vX.Y.Z` stands for the release you want). `--python 3.12` matters because `uv` ignores the upper bound of `requires-python` when it picks an interpreter; this package always passes it. The full guide, with the Claude Code plugin and the vaults, is in [`docs/install.md`](https://github.com/cloudfroghq/knowledge/blob/main/docs/install.md); the server itself is described in the [repository README](https://github.com/cloudfroghq/knowledge#readme).
 
-## Como servidor MCP
+## As an MCP server
+
+Pin the version (`X.Y.Z`, this package's version) so that every start runs the same release:
 
 ```json
 {
@@ -28,28 +30,31 @@ Las tres corren el mismo código: la versión de este paquete es la de PyPI y la
     "knowledge": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@cloudfrog/knowledge@0.9.0", "serve", "--transport", "stdio"]
+      "args": ["-y", "@cloudfrog/knowledge@X.Y.Z", "serve", "--transport", "stdio"],
+      "env": { "VAULT_PATH": "/path/to/your/vault" }
     }
   }
 }
 ```
 
-El primer arranque descarga `uv`, un CPython 3.12 gestionado por `uv` (si no hay uno) y las dependencias del paquete: puede pasar de los 30 s que un cliente MCP espera por omisión. Córrelo una vez a mano (`npx @cloudfrog/knowledge@0.9.0 doctor`) para dejar la caché caliente. El paquete nunca escribe en stdout: todo lo que imprime antes de arrancar el CLI va a stderr.
+The server needs a vault: `VAULT_PATH`, `KNOWLEDGE_VAULTS` (a `vaults.yaml`) or `~/.config/knowledge/vaults.yaml`. With the default `openai` embeddings provider it also needs `OPENAI_API_KEY`; `KNOWLEDGE_EMBEDDINGS_PROVIDER=none` runs lexical search without a key. See the [configuration reference](https://github.com/cloudfroghq/knowledge#configuration).
 
-## Qué hace en tu máquina
+The first start downloads `uv`, a `uv`-managed CPython 3.12 (if there is none) and the package's dependencies: it can take longer than the 30 s an MCP client waits by default. Run it once by hand (`npx @cloudfrog/knowledge@X.Y.Z doctor`) to warm the cache. The wrapper never writes to stdout: everything it prints before the CLI starts goes to stderr, so an MCP client talks to the server directly.
 
-- Elige el archivo de la release de `uv` de tu plataforma: macOS arm64 y x64, Linux x64 y arm64 (glibc o musl) y Windows x64 y arm64. Otra plataforma termina con `E_UV_UNSUPPORTED_PLATFORM`.
-- Lo baja de `https://github.com/astral-sh/uv/releases/download/<versión>/`, compara su SHA-256 con el que trae el paquete (`lib/uv-release.json`; nada se consulta en línea para eso) y, si no coincide, no instala nada (`E_UV_CHECKSUM_MISMATCH`).
-- Lo deja en `~/.cache/cloudfrog-knowledge/uv/<versión>/` (`$XDG_CACHE_HOME` si la defines; `%LOCALAPPDATA%\cloudfrog-knowledge\uv\<versión>\` en Windows). La instalación es atómica y un candado evita que dos arranques simultáneos descarguen dos veces; las corridas siguientes no tocan la red para `uv`.
-- Ejecuta `uv tool run --managed-python --python 3.12 --from cloudfrog-knowledge==<versión> <comando> <argumentos>`, con la misma entrada y salida, y termina con el código del CLI. Una señal que recibe el paquete pasa al CLI.
+## What it does on your machine
 
-| Variable | Para qué |
+- It picks the `uv` release archive for your platform: macOS arm64 and x64, Linux x64 and arm64 (glibc or musl), and Windows x64 and arm64. Any other platform ends with `E_UV_UNSUPPORTED_PLATFORM`.
+- It downloads it from `https://github.com/astral-sh/uv/releases/download/<version>/`, compares its SHA-256 with the one the package carries (`lib/uv-release.json`; nothing is looked up online for that) and, if they do not match, installs nothing (`E_UV_CHECKSUM_MISMATCH`).
+- It stores it in `~/.cache/cloudfrog-knowledge/uv/<version>/` (under `$XDG_CACHE_HOME` when you set it to an absolute path; `%LOCALAPPDATA%\cloudfrog-knowledge\uv\<version>\` on Windows). The install is atomic, and a lock keeps two simultaneous first starts from downloading twice; later runs do not touch the network for `uv`.
+- It runs `uv tool run --managed-python --python 3.12 --from cloudfrog-knowledge==<version> <command> <arguments>`, with the same stdin, stdout and stderr, and exits with the CLI's exit code. Signals the wrapper receives are passed on to the CLI.
+
+| Variable | What it is for |
 |---|---|
-| `CLOUDFROG_KNOWLEDGE_UV` | Ruta de un `uv` que ya tienes. Con ella no se descarga nada; si no es un archivo, sale con `E_UV_OVERRIDE_INVALID`. Sirve detrás de un proxy que Node no atraviesa. |
-| `KNOWLEDGE_COMMAND_LABEL` | El comando que nombran las pistas de `doctor` e `init` (por omisión, el que corriste: `knowledge` o `cloudfrog-knowledge`). |
+| `CLOUDFROG_KNOWLEDGE_UV` | Path of a `uv` you already have. With it nothing is downloaded; if it is not a file, the wrapper exits with `E_UV_OVERRIDE_INVALID`. Useful behind a proxy that Node cannot get through. |
+| `KNOWLEDGE_COMMAND_LABEL` | The command that the hints of `doctor` and `init` name (by default, the one you ran: `knowledge` or `cloudfrog-knowledge`). Read by the CLI, not by the wrapper. |
 
-Un fallo del paquete antes de arrancar el CLI (`E_UV_DOWNLOAD_FAILED` sin red, por ejemplo) imprime una sola línea `<código>: <mensaje>` en stderr y sale con 2.
+A wrapper failure before the CLI starts (`E_UV_DOWNLOAD_FAILED` without a network, for example) prints a single `<code>: <message>` line on stderr and exits with 2.
 
-## Licencia
+## License
 
-[PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0): ver `LICENSE`, incluida la línea `Required Notice:`.
+[MIT License](https://opensource.org/license/mit): see `LICENSE`.

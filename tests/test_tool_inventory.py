@@ -69,7 +69,7 @@ def test_inventory_states_the_declared_contract_version(live_catalog: dict) -> N
     rendered = inv.render(live_catalog)
 
     assert f"**{contract.CONTRACT_VERSION}.**" in rendered
-    assert "**Ninguna declarada.**" not in rendered
+    assert "**None declared.**" not in rendered
     assert f"`version: {live_catalog['server_info']['version']}`" in rendered
 
 
@@ -88,7 +88,7 @@ def test_server_info_still_carries_the_sdk_version(live_catalog: dict) -> None:
 def test_an_inventory_without_instructions_declares_no_version(live_catalog: dict) -> None:
     bare = {**live_catalog, "instructions": None}
 
-    assert "**Ninguna declarada.**" in inv.render(bare)
+    assert "**None declared.**" in inv.render(bare)
 
 
 def test_a_reworded_description_is_drift(live_catalog: dict) -> None:
@@ -121,12 +121,12 @@ def test_the_inventory_says_since_when_each_tool_exists(live_catalog: dict) -> N
 def test_the_inventory_names_the_retired_tool_the_profiles_and_the_output_mode(live_catalog: dict) -> None:
     rendered = inv.render(live_catalog)
 
-    assert "| `search_code` | 2.0.0 | `E_TOOL_RETIRED`; solo el perfil `legacy` la lista |" in rendered
-    assert "## Perfiles" in rendered and "`KNOWLEDGE_PROFILE`" in rendered
-    assert "Obsoleta" not in rendered
+    assert "| `search_code` | 2.0.0 | `E_TOOL_RETIRED`; only the `legacy` profile lists it |" in rendered
+    assert "## Profiles" in rendered and "`KNOWLEDGE_PROFILE`" in rendered
+    assert "Deprecated" not in rendered
     for name, extension in contract.TOOL_EXTENSION.items():
         assert f"| `{name}` | {contract.TOOL_SINCE[name]} | `{extension}` |" in rendered, name
-    assert "Salida de texto (`KNOWLEDGE_STRUCTURED_OUTPUT=0`, el default)" in rendered
+    assert "Text output (`KNOWLEDGE_STRUCTURED_OUTPUT=0`, the default)" in rendered
 
 
 def test_summaries_never_break_a_table_row() -> None:

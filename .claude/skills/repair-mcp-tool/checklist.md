@@ -1,11 +1,11 @@
 # Checklist — repair-mcp-tool
 
-- [ ] Fallo reproducido con los parámetros exactos documentados; salida literal del error guardada.
-- [ ] Test `pytest-asyncio` de regresión escrito contra `tests/fixtures/vault/` y visto en rojo antes del fix.
-- [ ] `graphify explain` corrido sobre el símbolo implicado.
-- [ ] El fix respeta las fronteras de capa (`indexer`/`graph`/`usage`/`tools`); `import-linter` no reporta violación nueva.
-- [ ] Suite completa + suite de contrato del RFC en verde.
-- [ ] Forma de la respuesta verificada contra el esquema congelado (`file_path` sin prefijo, sin corchetes de wikilink).
-- [ ] PR abierto con la salida antes/después adjunta.
-- [ ] Inventario de tools del servidor en el vault y `CLAUDE.md` del paquete actualizados si la tool cambia de estado.
-- [ ] `mem_save` con `topic_key: knowledge-mcp/tools/<tool>` completado.
+- [ ] Failure reproduced with the exact documented parameters; literal error output saved.
+- [ ] `pytest-asyncio` regression test written against `tests/fixtures/vault/` and seen in red before the fix.
+- [ ] `graphify explain` run on the symbol involved.
+- [ ] The fix respects the layer boundaries (core/ext/http, `.importlinter`); `import-linter` reports no new violation.
+- [ ] Full suite + the RFC's contract suite green.
+- [ ] Response shape verified against the frozen schema (`file_path` without a prefix, without wikilink brackets).
+- [ ] PR opened with the before/after output attached.
+- [ ] Server's tool inventory in the vault and the package's `CLAUDE.md` updated if the tool changes status.
+- [ ] `mem_save` with `topic_key: knowledge-mcp/tools/<tool>` completed.

@@ -1,6 +1,6 @@
 export const meta = {
   name: 'review-changes',
-  description: 'Revisa el diff en seguridad de corrutinas, contrato de tools y frontera del vault; verifica cada hallazgo con un segundo agente',
+  description: 'Reviews the diff for coroutine safety, the tool contract and the vault boundary; verifies each finding with a second agent',
   phases: [{ title: 'Review' }, { title: 'Verify' }],
 }
 
@@ -8,17 +8,17 @@ const DIMENSIONS = [
   {
     key: 'async-safety',
     prompt:
-      'Revisa el diff de knowledge buscando funciones async invocadas sin await (la clase de bug que rompió compare_flows y search_deep con "coroutine is not iterable"), o una tool nueva sin test asíncrono ni test de esquema. Reporta hallazgos con archivo, línea y escenario de falla concreto.',
+      'Review the knowledge diff looking for async functions called without await (the class of bug that broke compare_flows and search_deep with "coroutine is not iterable"), or a new tool without an async test or a schema test. Report findings with file, line and a concrete failure scenario.',
   },
   {
     key: 'tool-contract',
     prompt:
-      'Revisa si el diff cambia la forma de respuesta de alguna tool (incluida la forma de file_path: prefijo o corchetes de wikilink) sin bump de versión de la tool ni actualización del inventario de tools del servidor en el vault.',
+      'Check whether the diff changes the response shape of any tool (including the shape of file_path: prefix or wikilink brackets) without a tool version bump or an update of the server\'s tool inventory in the vault.',
   },
   {
     key: 'vault-boundary',
     prompt:
-      'Revisa si el diff introduce una escritura del servidor hacia vault/ fuera de 90 - Memory/, o un test que apunte al vault real en vez de a tests/fixtures/vault/.',
+      'Check whether the diff introduces a server write inside a vault outside 90 - Memory/, or a test that points at the real vault instead of tests/fixtures/vault/.',
   },
 ]
 
@@ -58,7 +58,7 @@ const results = await pipeline(
     parallel(
       review.findings.map((f) => () =>
         agent(
-          `Verifica adversarialmente este hallazgo contra el diff real: ${f.summary} (${f.file}:${f.line}). ${f.failure_scenario}`,
+          `Adversarially verify this finding against the real diff: ${f.summary} (${f.file}:${f.line}). ${f.failure_scenario}`,
           { label: `verify:${f.file}`, phase: 'Verify', schema: VERDICT_SCHEMA }
         ).then((v) => ({ ...f, verdict: v }))
       )
