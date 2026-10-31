@@ -9,7 +9,7 @@
   },
   "homepage": "https://github.com/cloudfroghq/claude-plugins",
   "repository": "https://github.com/cloudfroghq/knowledge",
-  "license": "LicenseRef-PolyForm-Shield-1.0.0",
+  "license": "MIT",
   "userConfig": {
     "vaults_config": {
       "type": "file",

@@ -21,7 +21,7 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
 def test_the_package_ships_the_repository_license_unchanged() -> None:
     assert (NPM / "LICENSE").read_bytes() == (REPO_ROOT / "LICENSE").read_bytes()
-    assert json.loads((NPM / "package.json").read_text(encoding="utf-8"))["license"] == "SEE LICENSE IN LICENSE"
+    assert json.loads((NPM / "package.json").read_text(encoding="utf-8"))["license"] == "MIT"
 
 
 def test_the_wrapper_and_the_workflows_pin_the_same_uv() -> None:

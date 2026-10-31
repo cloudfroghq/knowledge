@@ -20,6 +20,7 @@ Release dates come from the contract changelog and the release commit. Detail fo
 
 ### Changed
 
+- The project is relicensed under the MIT License starting with the next release. Releases up to 0.9.0 remain under PolyForm Shield 1.0.0.
 - Project documentation migrated to English (README, guides, runbooks and contributor files). Documentation only, plus the tool-inventory generator (`scripts/tool_inventory.py`), whose prose is now English, and the tests that assert on documentation headings; no tool contract, response or package behavior changes.
 
 ### Added

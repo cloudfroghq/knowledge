@@ -18,7 +18,7 @@
     "url": "git+https://github.com/cloudfroghq/knowledge.git",
     "directory": "npm"
   },
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "author": "CloudFrog <admin@cloudfrog.com.mx>",
   "bin": {
     "knowledge": "bin/knowledge.js",
