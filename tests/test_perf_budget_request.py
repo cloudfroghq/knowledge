@@ -15,6 +15,7 @@ the ``bag-of-words`` provider and no network. Nothing is patched.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import math
 import os
@@ -31,12 +32,13 @@ import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import Implementation
-from perf_counters import count_calls, file_opens
+from perf_counters import count_calls, file_opens, sql_trace
 from synthetic_vault import Manifest, generate, queries
 
 from knowledge import registry, server, settings, usage
 from knowledge.graph import LinkGraph
 from knowledge.registry import VaultRuntime
+from knowledge.stores import SQLiteStore
 from knowledge.usage import UsageTracker
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -271,6 +273,90 @@ def test_the_hebbian_save_cadence_is_unchanged(tmp_path: Path) -> None:
         server.drain_graph_saves(timeout=60)
         assert calls.count("_queue_graph_save") <= math.ceil(calls.count("reinforce") / 10)
         assert rt.hebbian_dirty["count"] < server._HEBBIAN_SAVE_EVERY
+
+
+# ---------------------------------------------------------------------------
+# 1.7b documents listed without their bodies
+# ---------------------------------------------------------------------------
+
+#: Whether the store can leave the bodies out (stream B, item 1.7a).
+STORE_READS_WITHOUT_BODY = "with_body" in inspect.signature(SQLiteStore.documents).parameters
+
+
+class _StoreWithoutKeyword:
+    """A store written before ``with_body``: it must still be called the old way."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, ...]] = []
+
+    def documents(self, flt: Any = None) -> list[Any]:
+        self.calls.append((flt,))
+        return []
+
+
+class _StoreWithKeyword(_StoreWithoutKeyword):
+    def documents(self, flt: Any = None, *, with_body: bool = True) -> list[Any]:  # type: ignore[override]
+        self.calls.append((flt, with_body))
+        return []
+
+
+class _ForwardingStore(_StoreWithoutKeyword):
+    def documents(self, flt: Any = None, **kwargs: Any) -> list[Any]:  # type: ignore[override]
+        self.calls.append((flt, *kwargs))
+        return []
+
+
+def test_the_body_is_left_out_only_where_the_store_takes_the_keyword() -> None:
+    flt = server.ChunkFilter(equals={"type": "runbook"})
+    old, new, forwarding = _StoreWithoutKeyword(), _StoreWithKeyword(), _ForwardingStore()
+
+    for store in (old, new, forwarding, old, new):
+        assert server._documents_without_body(store, flt) == []
+
+    assert old.calls == [(flt,), (flt,)]
+    assert new.calls == [(flt, False), (flt, False)]
+    assert forwarding.calls == [(flt,)]
+
+
+def test_every_tool_that_lists_documents_asks_for_them_without_bodies(tmp_path: Path) -> None:
+    with _served(tmp_path) as (rt, manifest):
+        rt.indexer.index(force=False, target="vault")
+        qs = queries(manifest, seed=3, n=2)
+
+        async def tools() -> None:
+            await server.search(query=qs[0], limit=5)
+            await server.search_deep(query=qs[1], limit=5)
+            await server.search_by_metadata(type="runbook", limit=3)
+            await server.get_stale_docs()
+
+        with count_calls(server._documents_without_body, rt.indexer.store.documents) as calls:
+            asyncio.run(tools())
+
+    # search: 1, search_deep: its seed search and its hops, search_by_metadata: 1, get_stale_docs: 2.
+    assert calls.count("_documents_without_body") >= 5
+    assert calls.count("documents") == calls.count("_documents_without_body")
+
+
+@pytest.mark.skipif(not STORE_READS_WITHOUT_BODY, reason="needs SQLiteStore.documents(with_body=False), item 1.7a")
+def test_no_tool_that_lists_documents_reads_their_bodies(tmp_path: Path) -> None:
+    with _served(tmp_path) as (rt, manifest):
+        rt.indexer.index(force=False, target="vault")
+        qs = queries(manifest, seed=3, n=4)
+        asyncio.run(server.search(query=qs[0], limit=5))  # builds the keyword index outside the count
+
+        async def tools() -> None:
+            await server.search(query=qs[1], limit=5)
+            await server.search_deep(query=qs[2], limit=5)
+            await server.search_by_metadata(type="runbook", limit=3)
+            await server.search_by_metadata(tag="area/a1", limit=3)
+            await server.get_stale_docs()
+
+        with sql_trace(rt.indexer.store) as trace:
+            asyncio.run(tools())
+
+    assert trace.count(r"FROM docs") > 0
+    assert trace.selects_column("docs", "body") == 0
+    assert trace.rows_with_column("body") == 0
 
 
 # ---------------------------------------------------------------------------
