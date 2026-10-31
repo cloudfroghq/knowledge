@@ -32,8 +32,6 @@ SLOS: list[tuple[str, str, float, str]] = [
 def _fmt(value: Any, unit: str = "ms") -> str:
     if value is None:
         return "-"
-    if unit == "ms" and value >= 1000:
-        return f"{value / 1000:.2f} s"
     if value >= 100:
         return f"{value:.0f}"
     if value >= 10:
