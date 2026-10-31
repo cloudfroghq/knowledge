@@ -84,7 +84,7 @@ def test_a_flush_reads_the_usage_file_once(tmp_path: Path) -> None:
     path = tmp_path / "usage_stats.json"
     _seed_usage(path)
     tracker = UsageTracker(path)
-    tracker.record_call("search", client="c", principal="stdio", error=False)
+    tracker.record_call("search", client="c", principal="stdio", error=False, latency_ms=4.0)
 
     with file_opens(tmp_path) as flushed:
         tracker.flush()

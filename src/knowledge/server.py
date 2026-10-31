@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar, Token
 from pathlib import Path
@@ -71,6 +72,9 @@ class KnowledgeMCP(FastMCP):
     The count goes to the usage tracker of the default vault (section
     ``tool_calls`` of its ``usage_stats.json``): the tool name, the client
     that sent the call and the principal of its bearer, never an argument.
+    How long the call took goes to section ``tool_latency``, as one count in
+    a fixed bucket under the day and the tool name alone. The timer only reads
+    the clock around the call.
     The response is the one FastMCP builds, untouched, and a count that
     cannot be recorded is logged and never fails the call. The count is
     recorded off the event loop and the response does not wait for it: a
@@ -86,6 +90,7 @@ class KnowledgeMCP(FastMCP):
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Sequence[ContentBlock] | dict[str, Any]:
         failed = True
+        started = time.perf_counter()
         try:
             if self._tool_manager.get_tool(name) is None:
                 _refuse_unregistered(name)
@@ -93,7 +98,7 @@ class KnowledgeMCP(FastMCP):
             failed = isinstance(result, CallToolResult) and bool(result.isError)
             return result
         finally:
-            _count_call(self, name, failed=failed)
+            _count_call(self, name, failed=failed, latency_ms=(time.perf_counter() - started) * 1000.0)
 
 
 def _refuse_unregistered(name: str) -> None:
@@ -143,7 +148,7 @@ def _caller(app: FastMCP) -> tuple[str | None, str | None]:
 _COUNTS = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="tool-call-count")
 
 
-def _count_call(app: FastMCP, name: str, *, failed: bool) -> None:
+def _count_call(app: FastMCP, name: str, *, failed: bool, latency_ms: float | None = None) -> None:
     """Queue one count of ``name`` for the default vault's tracker; never blocks the caller.
 
     The client and the principal are read here, inside the request, and the
@@ -153,12 +158,14 @@ def _count_call(app: FastMCP, name: str, *, failed: bool) -> None:
     """
     try:
         client, principal = _caller(app)
-        _COUNTS.submit(_record_count, name, client, principal, failed)
+        _COUNTS.submit(_record_count, name, client, principal, failed, latency_ms)
     except Exception:
         log.exception("tool-call count failed — the call is unaffected")
 
 
-def _record_count(name: str, client: str | None, principal: str | None, failed: bool) -> None:
+def _record_count(
+    name: str, client: str | None, principal: str | None, failed: bool, latency_ms: float | None = None
+) -> None:
     """Count one call of ``name`` on the default vault's tracker, when that vault is open.
 
     ``serve`` opens the default vault before it serves, so every call of a
@@ -171,7 +178,7 @@ def _record_count(name: str, client: str | None, principal: str | None, failed: 
         runtime = reg.default_if_open() if reg is not None else None
         if runtime is None:
             return
-        runtime.usage.record_call(name, client=client, principal=principal, error=failed)
+        runtime.usage.record_call(name, client=client, principal=principal, error=failed, latency_ms=latency_ms)
     except Exception:
         log.exception("tool-call count failed — the call is unaffected")
 

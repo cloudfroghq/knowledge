@@ -32,6 +32,12 @@ Two signals are recorded from search/read events:
   written yet, and every write adds them onto the counts on disk under the
   same file lock as the spend, so several processes over one vault never
   overwrite each other's calls. Days older than 120 are dropped.
+- Tool latency (section ``tool_latency``): how long each ``tools/call`` took,
+  per UTC day and tool, as counts in fixed buckets
+  (:data:`TOOL_LATENCY_BUCKETS_MS`). Only the day, the tool label and the
+  bucket bound are kept, never an argument; it is added onto the file like the
+  tool calls, with the same retention. A binary older than this section that
+  rewrites the file drops it, because it writes only the sections it knows.
 
 Attribution of an open to a query is by recency within one server process:
 the open is credited to the newest recent search whose results contained the
@@ -96,8 +102,11 @@ RERANK_LATENCY_BUCKETS_MS: tuple[int, ...] = (50, 100, 200, 300, 500, 750, 1000,
 _OPEN_BUCKET = "inf"
 # UTC days of search counts kept in ``rerank.searches_by_day``.
 _SEARCH_DAYS_KEPT = 31
-#: UTC days of tool-call counts kept in ``tool_calls.days``.
+#: UTC days of tool-call counts kept in ``tool_calls.days`` (and of ``tool_latency.days``).
 TOOL_CALL_DAYS_KEPT = 120
+#: Upper bounds, in milliseconds, of the tool-call latency buckets; ``inf`` takes the rest.
+#: Finer than the rerank buckets, which start at 50 ms: most tools answer in a few.
+TOOL_LATENCY_BUCKETS_MS: tuple[int, ...] = (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000)
 #: Label of a tool call without a client name, or a principal, to report.
 UNKNOWN_LABEL = "unknown"
 #: Label the principal of a call takes when it arrives over stdio (no bearer at all).
@@ -137,8 +146,9 @@ def utc_day() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
-def _latency_bucket(latency_ms: float) -> str:
-    for bound in RERANK_LATENCY_BUCKETS_MS:
+def _latency_bucket(latency_ms: float, bounds: tuple[int, ...] = RERANK_LATENCY_BUCKETS_MS) -> str:
+    """The label of the first bucket of ``bounds`` that holds ``latency_ms``; ``inf`` past the last."""
+    for bound in bounds:
         if latency_ms <= bound:
             return str(bound)
     return _OPEN_BUCKET
@@ -278,6 +288,66 @@ def _kept_call_days(
     return {day: days[day] for day in sorted(days) if day >= cutoff}
 
 
+#: Bucket labels of ``tool_latency``, in bound order.
+_TOOL_LATENCY_LABELS: tuple[str, ...] = (*(str(b) for b in TOOL_LATENCY_BUCKETS_MS), _OPEN_BUCKET)
+_TOOL_LATENCY_ORDER = {label: n for n, label in enumerate(_TOOL_LATENCY_LABELS)}
+
+
+def _add_latency(days: dict[str, dict[str, dict[str, int]]], day: str, tool: str, bucket: str, n: int) -> None:
+    """Add ``n`` calls of ``tool`` to ``bucket`` of ``day``, folding tools past the daily cap into ``other``."""
+    tools = days.setdefault(day, {})
+    if tool not in tools and len(tools) >= _MAX_TOOLS_PER_DAY:
+        tool = OTHER_LABEL
+    buckets = tools.setdefault(tool, {})
+    buckets[bucket] = buckets.get(bucket, 0) + n
+
+
+def _tool_latency_days(raw: Any) -> dict[str, dict[str, dict[str, int]]]:
+    """The ``days`` of a ``tool_latency`` section, well typed: ``day -> tool -> bucket -> calls``.
+
+    Anything malformed, and any bucket label other than the bounds of
+    :data:`TOOL_LATENCY_BUCKETS_MS` and ``inf``, reads as no calls.
+    """
+    out: dict[str, dict[str, dict[str, int]]] = {}
+    days = raw.get("days") if isinstance(raw, dict) else None
+    if not isinstance(days, dict):
+        return out
+    for day, tools in days.items():
+        if not isinstance(day, str) or not isinstance(tools, dict):
+            continue
+        for tool, buckets in tools.items():
+            if not isinstance(buckets, dict):
+                continue
+            for bucket, n in buckets.items():
+                if bucket in _TOOL_LATENCY_ORDER and isinstance(n, int) and not isinstance(n, bool) and n > 0:
+                    _add_latency(out, day, str(tool), bucket, n)
+    return out
+
+
+def _merge_latency_days(
+    into: dict[str, dict[str, dict[str, int]]], extra: dict[str, dict[str, dict[str, int]]]
+) -> None:
+    for day, tools in extra.items():
+        for tool, buckets in tools.items():
+            for bucket, n in buckets.items():
+                _add_latency(into, day, tool, bucket, n)
+
+
+def _kept_latency_days(
+    days: dict[str, dict[str, dict[str, int]]], today: str
+) -> dict[str, dict[str, dict[str, int]]]:
+    """``days`` without the ones older than :data:`TOOL_CALL_DAYS_KEPT`; days in order, buckets by bound."""
+    cutoff = (date.fromisoformat(today) - timedelta(days=TOOL_CALL_DAYS_KEPT - 1)).isoformat()
+    return {
+        day: {
+            tool: dict(sorted(buckets.items(), key=lambda kv: _TOOL_LATENCY_ORDER[kv[0]]))
+            for tool, buckets in days[day].items()
+        }
+        for day in sorted(days)
+        if day >= cutoff
+    }
+
+
 def tool_calls_summary(
     path: Path,
     *,
@@ -301,6 +371,7 @@ def tool_calls_summary(
         raw = {}
     day = day or utc_day()
     days = _kept_call_days(_tool_call_days(raw.get("tool_calls") if isinstance(raw, dict) else None), day)
+    timings = _kept_latency_days(_tool_latency_days(raw.get("tool_latency") if isinstance(raw, dict) else None), day)
 
     def window(first: str) -> dict[str, Any]:
         calls = errs = 0
@@ -340,17 +411,41 @@ def tool_calls_summary(
     out["unregistered"] = (
         {tool: n for tool, n in kept["by_tool"].items() if tool not in registered} if registered else {}
     )
+    if timings:
+        # Only once some call was timed, so a vault without timings reports
+        # the same block as before the histogram existed.
+        out["latency_ms"] = _latency_summary(timings)
     return out
 
 
-def _percentile_ms(histogram: dict[str, int], fraction: float) -> int | None:
+def _latency_summary(days: dict[str, dict[str, dict[str, int]]]) -> dict[str, dict[str, int | None]]:
+    """Per tool over every kept day: calls and the p50/p95 bucket bounds (``None`` in the open bucket)."""
+    by_tool: dict[str, dict[str, int]] = {}
+    for tools in days.values():
+        for tool, buckets in tools.items():
+            merged = by_tool.setdefault(tool, {})
+            for bucket, n in buckets.items():
+                merged[bucket] = merged.get(bucket, 0) + n
+    return {
+        tool: {
+            "calls": sum(histogram.values()),
+            "p50": _percentile_ms(histogram, 0.5, TOOL_LATENCY_BUCKETS_MS),
+            "p95": _percentile_ms(histogram, 0.95, TOOL_LATENCY_BUCKETS_MS),
+        }
+        for tool, histogram in sorted(by_tool.items())
+    }
+
+
+def _percentile_ms(
+    histogram: dict[str, int], fraction: float, bounds: tuple[int, ...] = RERANK_LATENCY_BUCKETS_MS
+) -> int | None:
     """The bucket bound below which ``fraction`` of the calls fell; ``None`` when none or in the open bucket."""
     total = sum(histogram.values())
     if total <= 0:
         return None
     needed = fraction * total
     seen = 0
-    for bound in RERANK_LATENCY_BUCKETS_MS:
+    for bound in bounds:
         seen += histogram.get(str(bound), 0)
         if seen >= needed:
             return bound
@@ -444,6 +539,8 @@ class UsageTracker:
         self._rerank: dict[str, Any] = _fresh_rerank()
         # Tool calls this process has not written yet; see the module docstring.
         self._calls_pending: dict[str, dict[str, dict[str, dict[str, dict[str, int]]]]] = {}
+        # Latency buckets of the tool calls this process has not written yet.
+        self._latency_pending: dict[str, dict[str, dict[str, int]]] = {}
         self._decayed_at: float = time.time()
         self._load()
         if flush_interval_s is not None:
@@ -588,16 +685,29 @@ class UsageTracker:
         elif due:
             self.flush_if_dirty()
 
-    def record_call(self, tool: str, *, client: str | None, principal: str | None, error: bool) -> None:
+    def record_call(
+        self,
+        tool: str,
+        *,
+        client: str | None,
+        principal: str | None,
+        error: bool,
+        latency_ms: float | None = None,
+    ) -> None:
         """Count one ``tools/call`` of ``tool`` in today's (UTC) bucket of ``client`` and ``principal``.
 
         The names are reduced to :func:`call_label`; nothing else about the
-        call is kept. The count is added onto the file with the next flush.
+        call is kept. ``latency_ms``, when given, is counted in its bucket of
+        :data:`TOOL_LATENCY_BUCKETS_MS` under the day and the tool alone. The
+        counts are added onto the file with the next flush.
         """
         day = utc_day()
         name = call_label(tool, max_len=_TOOL_LABEL_MAX)
         with self._lock:
             _add_call(self._calls_pending, day, name, call_label(client), call_label(principal), 1, 1 if error else 0)
+            if latency_ms is not None:
+                bucket = _latency_bucket(max(0.0, latency_ms), TOOL_LATENCY_BUCKETS_MS)
+                _add_latency(self._latency_pending, day, name, bucket, 1)
             due = self._add_hits_locked(1)
         if due:
             self.flush_if_dirty()
@@ -606,6 +716,11 @@ class UsageTracker:
         """A copy of the tool calls this process counted and has not written yet."""
         with self._lock:
             return json.loads(json.dumps(self._calls_pending))
+
+    def pending_tool_latency(self) -> dict[str, Any]:
+        """A copy of the tool-call latency buckets this process counted and has not written yet."""
+        with self._lock:
+            return json.loads(json.dumps(self._latency_pending))
 
     def rerank_usd_today(self) -> float:
         """US dollars the judge of this vault cost today (UTC), as every process recorded it on disk."""
@@ -712,7 +827,7 @@ class UsageTracker:
         self.flush_if_dirty()
 
     def _pending_locked(self) -> bool:
-        return bool(self._dirty_hits or self._calls_pending)
+        return bool(self._dirty_hits or self._calls_pending or self._latency_pending)
 
     def _add_hits_locked(self, hits: int) -> bool:
         """Count ``hits`` more pending hits; ``True`` when the caller must write now (inline only)."""
@@ -844,11 +959,14 @@ class UsageTracker:
                 self._apply_decay()
                 payload = self._snapshot_locked()
                 calls, self._calls_pending = self._calls_pending, {}
+                timings, self._latency_pending = self._latency_pending, {}
                 hits, self._dirty_hits = self._dirty_hits, 0
-            if not self._replace(payload, raw, calls):
+            if not self._replace(payload, raw, calls, timings):
                 with self._lock:
                     newer, self._calls_pending = self._calls_pending, calls
                     _merge_call_days(self._calls_pending, newer)
+                    newer_timings, self._latency_pending = self._latency_pending, timings
+                    _merge_latency_days(self._latency_pending, newer_timings)
                     self._dirty_hits += hits
 
     def _snapshot_locked(self) -> dict[str, Any]:
@@ -863,13 +981,25 @@ class UsageTracker:
             payload["rerank"] = copy.deepcopy(self._rerank)
         return payload
 
-    def _replace(self, payload: dict[str, Any], raw: Any, calls: dict[str, Any]) -> bool:
-        """Add ``calls`` onto the tool calls of ``raw`` and replace the file atomically; ``False`` on failure."""
+    def _replace(self, payload: dict[str, Any], raw: Any, calls: dict[str, Any], timings: dict[str, Any]) -> bool:
+        """Add ``calls`` and ``timings`` onto the sections of ``raw`` and replace the file atomically.
+
+        ``False`` when the file could not be written.
+        """
+        today = utc_day()
         days = _tool_call_days(raw.get("tool_calls") if isinstance(raw, dict) else None)
         _merge_call_days(days, calls)
-        days = _kept_call_days(days, utc_day())
+        days = _kept_call_days(days, today)
         if days:
             payload["tool_calls"] = {"days": days}
+        # A binary older than this section rewrites the file without it (it
+        # writes only the sections it knows), so an older process sharing the
+        # vault can drop the histograms; the other sections are unaffected.
+        merged = _tool_latency_days(raw.get("tool_latency") if isinstance(raw, dict) else None)
+        _merge_latency_days(merged, timings)
+        merged = _kept_latency_days(merged, today)
+        if merged:
+            payload["tool_latency"] = {"days": merged}
         tmp = self._path.with_name(f"{self._path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
