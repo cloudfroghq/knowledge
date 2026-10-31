@@ -10,6 +10,8 @@ Nothing is patched and nothing is timed.
 from __future__ import annotations
 
 import dataclasses
+import sqlite3
+import threading
 import tracemalloc
 from collections.abc import Iterator
 from pathlib import Path
@@ -187,3 +189,35 @@ def test_the_vocabulary_holds_less_than_the_bodies_it_replaces(manifest: Manifes
     # The build itself peaks near the size of the bodies on a small vault; the
     # vocabulary grows sublinearly, so the peak falls below them as the vault grows.
     assert peak - base <= held_before * 5 // 4
+
+
+# ---------------------------------------------------------------------------
+# 1.8 mmap_size on every store connection
+# ---------------------------------------------------------------------------
+
+
+def test_every_store_connection_maps_the_index(tmp_path: Path) -> None:
+    probe = sqlite3.connect(str(tmp_path / "probe.sqlite"))
+    try:
+        # What this SQLite build grants (it clamps to SQLITE_MAX_MMAP_SIZE).
+        expected = probe.execute(f"PRAGMA mmap_size={stores.MMAP_SIZE}").fetchone()[0]
+    finally:
+        probe.close()
+    assert expected == stores.MMAP_SIZE, "the pipeline's SQLite maps up to MMAP_SIZE"
+    store = SQLiteStore.open(tmp_path / "idx")
+    try:
+        with store._lock:
+            assert store._write_conn().execute("PRAGMA mmap_size").fetchone()[0] == expected
+        assert store._reader().execute("PRAGMA mmap_size").fetchone()[0] == expected
+        seen: list[int] = []
+        worker = threading.Thread(target=lambda: seen.append(store._reader().execute("PRAGMA mmap_size").fetchone()[0]))
+        worker.start()
+        worker.join()
+        assert seen == [expected]
+        store.close()  # a reopened connection maps it too
+        assert store._reader().execute("PRAGMA mmap_size").fetchone()[0] == expected
+        with sql_trace(store) as trace:
+            store.count()
+        assert trace.count(r"mmap_size") == 0, "the pragma is connection setup, not a per-read statement"
+    finally:
+        store.close()
