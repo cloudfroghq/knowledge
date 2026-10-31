@@ -45,7 +45,7 @@ Contract 2.0.0 breaks 1.x on purpose, so a frozen 1.4.0 golden is no longer
 compared with the live answer as it was recorded. It first goes through
 :func:`migrate_1_4_to_2_0`, which applies the declared rules of
 :data:`MIGRATIONS_2_0` and nothing else; the result is then held to the rules
-above, by value. Each rule carries the id of its row in the «Rompe» table of
+above, by value. Each rule carries the id of its row in the "Breaking" table of
 ``## 2.0.0`` in ``docs/contract/CHANGELOG.md`` (``R<n>``), and a test keeps
 both sets equal, so a change that no rule declares fails the replay. Only
 1.4.0 is replayed against a 2.x server: the 1.0.0-1.3.0 goldens stay frozen
@@ -968,7 +968,7 @@ _GOVERNANCE_RESPONSE, _GOVERNANCE_CATALOG = _gated_by("governance")
 
 
 #: Every rule 2.0.0 declares, by id. ``test_every_2_0_migration_is_declared_in_the_changelog``
-#: keeps the ids equal to the rows of «Rompe» under ``## 2.0.0``.
+#: keeps the ids equal to the rows of "Breaking" under ``## 2.0.0``.
 MIGRATIONS_2_0: Mapping[str, Migration] = MappingProxyType(
     {
         "R1": Migration(

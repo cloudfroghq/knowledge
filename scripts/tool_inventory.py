@@ -139,9 +139,9 @@ def _params(tool: dict[str, Any]) -> list[tuple[str, str, bool, str]]:
 def _output(tool: dict[str, Any]) -> str:
     schema = tool.get("outputSchema")
     if not schema:
-        return "no declara `outputSchema`"
+        return "declares no `outputSchema`"
     result = schema.get("properties", {}).get("result", {})
-    return f"`outputSchema` derivado de la anotación de retorno (`result`: `{_type_of(result)}`)"
+    return f"`outputSchema` derived from the return annotation (`result`: `{_type_of(result)}`)"
 
 
 #: Prefix of the first ``instructions`` line that names the contract version.
@@ -159,19 +159,19 @@ def declared_contract_version(instructions: str | None) -> str | None:
 def _contract_section(catalog: dict[str, Any]) -> str:
     info = catalog["server_info"]
     sdk = (
-        f"`serverInfo` dice `name: {info.get('name')}`, `version: {info.get('version')}`, pero esa versión es la "
-        "del SDK `mcp` (FastMCP la rellena con la versión del paquete cuando el servidor no declara una), no la "
-        f"del contrato. Protocolo negociado: `{catalog['protocol_version']}`."
+        f"`serverInfo` says `name: {info.get('name')}`, `version: {info.get('version')}`, but that version is "
+        "the `mcp` SDK's (FastMCP fills it in with the package version when the server does not declare one), "
+        f"not the contract's. Negotiated protocol: `{catalog['protocol_version']}`."
     )
     version = declared_contract_version(catalog.get("instructions"))
     if version is None:
         return (
-            "**Ninguna declarada.** El servidor no anuncia una versión del contrato de tools: ni el catálogo ni "
-            f"ninguna tool la llevan. {sdk}"
+            "**None declared.** The server does not announce a tool contract version: neither the catalog nor "
+            f"any tool carries one. {sdk}"
         )
     return (
-        f"**{version}.** El servidor la anuncia en la primera línea de `instructions` del `initialize` "
-        f"(`{CONTRACT_LINE_PREFIX}{version}`); su historial vive en `docs/contract/CHANGELOG.md`. {sdk}"
+        f"**{version}.** The server announces it on the first line of the `initialize` `instructions` "
+        f"(`{CONTRACT_LINE_PREFIX}{version}`); its history lives in `docs/contract/CHANGELOG.md`. {sdk}"
     )
 
 
@@ -183,11 +183,11 @@ def _since(name: str) -> str:
 
 
 def _extension(name: str) -> str:
-    """The extension a tool belongs to, as the summary table shows it; ``núcleo`` for the core tools."""
+    """The extension a tool belongs to, as the summary table shows it; ``core`` for the core tools."""
     from knowledge import contract
 
     extension = contract.TOOL_EXTENSION.get(name)
-    return f"`{extension}`" if extension else "núcleo"
+    return f"`{extension}`" if extension else "core"
 
 
 def _gated(name: str) -> str | None:
@@ -196,11 +196,11 @@ def _gated(name: str) -> str | None:
 
     for ext in extensions.EXTENSIONS:
         if ext.gated and name in ext.tools:
-            transports = " y ".join(sorted(ext.transports))
-            legacy = " El perfil `legacy` la registra sin mirar `features`." if ext.legacy_always else ""
+            transports = " and ".join(sorted(ext.transports))
+            legacy = " The `legacy` profile registers it without looking at `features`." if ext.legacy_always else ""
             return (
-                f"Solo aparece cuando algún vault servido declara la extensión `{ext.name}` en `features` "
-                f"(transporte {transports}); sin ella el catálogo no la lista y llamarla responde "
+                f"It only appears when some served vault declares the `{ext.name}` extension in `features` "
+                f"(transport {transports}); without it the catalog does not list it and calling it answers "
                 f"`E_FEATURE_DISABLED`.{legacy}"
             )
     return None
@@ -211,22 +211,22 @@ def _profiles_section() -> list[str]:
     from knowledge import contract
 
     lines = [
-        "## Perfiles",
+        "## Profiles",
         "",
-        f"`{contract.DEFAULT_PROFILE}` (el default) registra las tools del núcleo y, después, las de cada extensión "
-        f"que algún vault servido declara: es el catálogo de arriba. `{contract.LEGACY_PROFILE}` registra el "
-        "catálogo de 1.4.0, nombre por nombre y en su orden, con las respuestas de este contrato: las tools de "
-        "`flows`, `governance` y `confluence` sin mirar `features`, y las tools retiradas. Se elige con "
-        "`serve --profile` o `KNOWLEDGE_PROFILE` (la bandera gana).",
+        f"`{contract.DEFAULT_PROFILE}` (the default) registers the core tools and, after them, those of each "
+        f"extension that some served vault declares: it is the catalog above. `{contract.LEGACY_PROFILE}` "
+        "registers the 1.4.0 catalog, name by name and in its order, with the responses of this contract: the "
+        "`flows`, `governance` and `confluence` tools without looking at `features`, and the retired tools. It is "
+        "chosen with `serve --profile` or `KNOWLEDGE_PROFILE` (the flag wins).",
         "",
-        "## Retiradas",
+        "## Retired",
         "",
-        "| Tool | Retirada en | Bajo `all` |",
+        "| Tool | Retired in | Under `all` |",
         "|---|---|---|",
     ]
     for name, version in contract.TOOL_REMOVED.items():
         lines.append(
-            f"| `{name}` | {version} | `E_TOOL_RETIRED`; solo el perfil `{contract.LEGACY_PROFILE}` la lista |"
+            f"| `{name}` | {version} | `E_TOOL_RETIRED`; only the `{contract.LEGACY_PROFILE}` profile lists it |"
         )
     return lines
 
@@ -236,42 +236,42 @@ def _deprecation(tool: dict[str, Any]) -> str | None:
     if not meta.get("knowledge/deprecated"):
         return None
     removal = meta.get("knowledge/removal")
-    return f"Obsoleta (`_meta.knowledge/deprecated`); se retira en {removal}." if removal else "Obsoleta."
+    return f"Deprecated (`_meta.knowledge/deprecated`); removed in {removal}." if removal else "Deprecated."
 
 
 def _output_mode(tools: list[dict[str, Any]]) -> str:
     if all(tool.get("outputSchema") for tool in tools):
         return (
-            "Salida estructurada activa (`KNOWLEDGE_STRUCTURED_OUTPUT=1`): cada tool declara `outputSchema` y "
-            "cada respuesta trae `structuredContent`, el mismo JSON que sus bloques de texto."
+            "Structured output on (`KNOWLEDGE_STRUCTURED_OUTPUT=1`): every tool declares `outputSchema` and "
+            "every response carries `structuredContent`, the same JSON as its text blocks."
         )
     return (
-        "Salida de texto (`KNOWLEDGE_STRUCTURED_OUTPUT=0`, el default): los bloques de texto son la respuesta "
-        "canónica de cada tool. Con `1` cada tool declara además `outputSchema` y cada respuesta trae "
-        "`structuredContent`, el mismo JSON; el orden del catálogo no cambia."
+        "Text output (`KNOWLEDGE_STRUCTURED_OUTPUT=0`, the default): the text blocks are each tool's canonical "
+        "response. With `1` every tool also declares `outputSchema` and every response carries "
+        "`structuredContent`, the same JSON; the catalog order does not change."
     )
 
 
 def render(catalog: dict[str, Any]) -> str:
     tools = catalog["tools"]
     lines = [
-        "# Inventario de tools",
+        "# Tool inventory",
         "",
         f"<!-- Generated by `{REGENERATE}` from the live tools/list catalog. Do not edit by hand. -->",
         "",
-        "Catálogo que el servidor anuncia por `tools/list`, leído por stdio con un handshake real (no se deriva "
-        "del código fuente). `tests/test_tool_inventory.py` falla si este archivo y el catálogo divergen; se "
-        f"regenera con `{REGENERATE}`.",
+        "Catalog the server announces through `tools/list`, read over stdio with a real handshake (it is not "
+        "derived from the source code). `tests/test_tool_inventory.py` fails if this file and the catalog "
+        f"diverge; it is regenerated with `{REGENERATE}`.",
         "",
-        "## Versión de contrato",
+        "## Contract version",
         "",
         _contract_section(catalog),
         "",
         _output_mode(tools),
         "",
-        f"## Resumen ({len(tools)} tools, en orden de registro)",
+        f"## Summary ({len(tools)} tools, in registration order)",
         "",
-        "| # | Tool | Desde | Extensión | Parámetros (requeridos en negrita) | Resumen |",
+        "| # | Tool | Since | Extension | Parameters (required in bold) | Summary |",
         "|---|---|---|---|---|---|",
     ]
     for i, tool in enumerate(tools, start=1):
@@ -283,8 +283,8 @@ def render(catalog: dict[str, Any]) -> str:
     lines += ["", *_profiles_section()]
 
     for tool in tools:
-        lines += ["", f"## `{tool['name']}`", "", _one_line(tool.get("description", "")) or "(sin descripción)", ""]
-        lines += [f"Desde el contrato {_since(tool['name'])}.", ""]
+        lines += ["", f"## `{tool['name']}`", "", _one_line(tool.get("description", "")) or "(no description)", ""]
+        lines += [f"Since contract {_since(tool['name'])}.", ""]
         deprecation = _deprecation(tool)
         if deprecation:
             lines += [deprecation, ""]
@@ -293,11 +293,11 @@ def render(catalog: dict[str, Any]) -> str:
             lines += [gated, ""]
         params = _params(tool)
         if params:
-            lines += ["| Parámetro | Tipo | Requerido | Default |", "|---|---|---|---|"]
-            lines += [f"| `{n}` | {t} | {'sí' if req else 'no'} | {d} |" for n, t, req, d in params]
+            lines += ["| Parameter | Type | Required | Default |", "|---|---|---|---|"]
+            lines += [f"| `{n}` | {t} | {'yes' if req else 'no'} | {d} |" for n, t, req, d in params]
         else:
-            lines.append("Sin parámetros.")
-        lines += ["", f"Respuesta: {_output(tool)}."]
+            lines.append("No parameters.")
+        lines += ["", f"Response: {_output(tool)}."]
     return "\n".join(lines) + "\n"
 
 

@@ -68,7 +68,7 @@ Python (it only hashes files, so it runs where this module is skipped), so an
 old version can neither be re-recorded nor edited by hand. Contract 2.0.0
 breaks 1.x on purpose, so the frozen 1.4.0 goldens are replayed through the
 declared migration of ``golden_compat`` (``migrate_1_4_to_2_0``: only the
-``R<n>`` rules of the changelog's «Rompe» table) and then compared on parsed
+``R<n>`` rules of the changelog's "Breaking" table) and then compared on parsed
 JSON, key by key and value by value, in a session of their own so the cases
 of newer versions never move their counters. That session runs every 1.4.0
 case in its order over the vault of the ``features`` session (the fixture
@@ -1212,13 +1212,13 @@ def _changelog_section(version: str) -> str:
 
 
 def _breaking_rules(section: str) -> list[str]:
-    """The ``R<n>`` ids of the rows of the «Rompe» table of a changelog section, in order."""
-    rompe = section.split("### Rompe", 1)[1].split("\n### ", 1)[0]
-    return re.findall(r"^\| (R\d+) \|", rompe, flags=re.MULTILINE)
+    """The ``R<n>`` ids of the rows of the "Breaking" table of a changelog section, in order."""
+    breaking = section.split("### Breaking", 1)[1].split("\n### ", 1)[0]
+    return re.findall(r"^\| (R\d+) \|", breaking, flags=re.MULTILINE)
 
 
 def test_every_2_0_migration_is_declared_in_the_changelog() -> None:
-    """The rules the replay applies and the rows «Rompe» declares are the same set, once each."""
+    """The rules the replay applies and the rows "Breaking" declares are the same set, once each."""
     declared = _breaking_rules(_changelog_section("2.0.0"))
 
     assert len(declared) == len(set(declared)), f"a rule is declared twice: {declared}"
