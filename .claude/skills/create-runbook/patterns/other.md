@@ -10,7 +10,7 @@ knowledge_ref: "none"
 
 # Defaults — other
 
-The escape hatch named in `create-runbook`'s own "Cuándo NO correr esto": the
+The escape hatch named in `create-runbook`'s own "When NOT to run this": the
 ticket's symptom does not fit any of the five named patterns yet. There is no
 category template to fall back on, so `category` and `service` have **no**
 default here — `instantiate-runbook.sh` requires both explicitly (`--category`,

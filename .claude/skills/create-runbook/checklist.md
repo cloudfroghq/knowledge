@@ -1,18 +1,18 @@
 # Checklist — create-runbook
 
-- [ ] `jira_get_issue(KEY, comment_limit=20)` corrido; síntomas, país, partner e `issue_type` extraídos.
-- [ ] `mem_search(incident/<KEY>)`, `search(query=<síntomas>)` y `search_by_metadata(type="runbook")` sin encontrar un runbook existente que valga; si lo hay, validado que el procedimiento sigue siendo válido.
-- [ ] `next-runbook-id.sh` ejecutado; `RB-NNN` anotado y no duplicado en el vault.
-- [ ] `instantiate-runbook.sh --id RB-NNN --pattern <pattern> --out-dir "$MEMORY_PROJECT_STAGING/create-runbook"` corrido; documento en `RB-NNN <Title>.md` (FUERA del vault); frontmatter completo con `status: draft`, síntomas y referencias, causa raíz verificada contra el ticket, pasos de resolución válidos hoy, sin PII.
-- [ ] Confirmación humana obtenida con `AskUserQuestion`; ajustes incorporados si los hubo.
-- [ ] `validate-runbook.sh <archivo-en-staging>` exit 0; los 12 checks pasados.
-- [ ] Índice (`Runbooks.md`) actualizado en staging con la nueva fila si aplica.
-- [ ] `Issue Patterns from Jira.md` actualizado en staging si el `pattern` es nuevo.
-- [ ] Delegación a `open-pr` completada; PR abierto contra `main` de `knowledge` en rama `docs/rb-nnn-<slug>`, con título `docs(runbooks): add RB-NNN <slug>` y descripción coherente.
-- [ ] `mem_save` (`type: architecture`, `topic_key: runbook/RB-NNN`) ejecutado con síntomas, causa raíz, refs de Jira, servicio y owner.
+- [ ] `jira_get_issue(KEY, comment_limit=20)` run; symptoms, country, partner and `issue_type` extracted.
+- [ ] `mem_search(incident/<KEY>)`, `search(query=<symptoms>)` and `search_by_metadata(type="runbook")` run without finding an existing runbook that fits; if there is one, verified that the procedure is still valid.
+- [ ] `next-runbook-id.sh` run; `RB-NNN` noted and not duplicated in the vault.
+- [ ] `instantiate-runbook.sh --id RB-NNN --pattern <pattern> --out-dir "$MEMORY_PROJECT_STAGING/create-runbook"` run; document at `RB-NNN <Title>.md` (OUTSIDE the vault); complete frontmatter with `status: draft`, symptoms and references, root cause verified against the ticket, resolution steps valid today, no PII.
+- [ ] Human confirmation obtained with `AskUserQuestion`; adjustments incorporated if there were any.
+- [ ] `validate-runbook.sh <staging-file>` exit 0; all 12 checks passed.
+- [ ] Index (`Runbooks.md`) updated in staging with the new row if applicable.
+- [ ] `Issue Patterns from Jira.md` updated in staging if the `pattern` is new.
+- [ ] Delegation to `open-pr` completed; PR opened against `main` of `knowledge` on branch `docs/rb-nnn-<slug>`, with title `docs(runbooks): add RB-NNN <slug>` and a coherent description.
+- [ ] `mem_save` (`type: architecture`, `topic_key: runbook/RB-NNN`) run with symptoms, root cause, Jira refs, service and owner.
 
-**Paso manual posterior (NO en esta skill):**
+**Manual step afterwards (NOT in this skill):**
 
-- [ ] PR revisado y fusionado contra `main` de `knowledge` (decisión humana).
-- [ ] Persona ejecuta `bash ai-architecture/ai-platform-plan/05-runbooks/migracion/scripts/aplicar-migracion.sh --apply` para copiar el documento de staging al vault.
-- [ ] Cambios en el vault confirmados y pusheados (sin abrir otro PR desde el agente).
+- [ ] PR reviewed and merged into `main` of `knowledge` (human decision).
+- [ ] Person runs `bash ai-architecture/ai-platform-plan/05-runbooks/migracion/scripts/aplicar-migracion.sh --apply` to copy the staging document into the vault.
+- [ ] Changes in the vault confirmed and pushed (without opening another PR from the agent).

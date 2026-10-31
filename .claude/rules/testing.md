@@ -4,11 +4,11 @@ paths: ["src/knowledge/**", "tests/**"]
 
 # Testing
 
-- Ningún test usa el vault de producción: todo corre contra `tests/fixtures/vault/`.
-- Toda tool tiene al menos un test asíncrono que la invoca por su interfaz real, y un test de esquema que congela la forma de la respuesta.
-- Una reparación entra con su test de regresión en rojo primero, usando los parámetros documentados como fallidos hoy.
-- Los umbrales de cobertura viven en `pyproject.toml`, nunca solo en un documento.
-- El pipeline corre en Linux, no en macOS: la insensibilidad a mayúsculas de macOS ya ocultó un defecto real.
-- La suite usa el almacén real: un `SQLiteStore` sobre un directorio temporal, con FTS5 y `sqlite-vec`. Los embeddings los pone el proveedor determinista `bag-of-words` (`KNOWLEDGE_EMBEDDINGS_PROVIDER=bag-of-words`); ninguna prueba llama a OpenAI ni parchea el almacén.
-- `KNOWLEDGE_REQUIRE_SQLITE_VEC=1` convierte el respaldo `python` (la extensión no carga en ese Python) en el error `E_SQLITE_VEC_UNAVAILABLE`: el pipeline y la grabación de goldens lo fijan, y los goldens se graban solo con el Python 3.12 de `uv`.
-- La suite de contrato del RFC es bloqueante y se actualiza junto con el RFC, nunca después.
+- No test uses the production vault: everything runs against `tests/fixtures/vault/`.
+- Every tool has at least one async test that invokes it through its real interface, and a schema test that freezes the response shape.
+- A repair lands with its regression test in red first, using the parameters documented as failing today.
+- Coverage thresholds live in `pyproject.toml`, never only in a document.
+- The pipeline runs on Linux, not on macOS: macOS case-insensitivity has already hidden a real defect.
+- The suite uses the real store: a `SQLiteStore` over a temporary directory, with FTS5 and `sqlite-vec`. Embeddings come from the deterministic `bag-of-words` provider (`KNOWLEDGE_EMBEDDINGS_PROVIDER=bag-of-words`); no test calls OpenAI or patches the store.
+- `KNOWLEDGE_REQUIRE_SQLITE_VEC=1` turns the `python` fallback (the extension does not load in that Python) into the `E_SQLITE_VEC_UNAVAILABLE` error: the pipeline and the golden recording set it, and goldens are recorded only with `uv`'s Python 3.12.
+- The RFC's contract suite is blocking and is updated together with the RFC, never afterwards.

@@ -1,7 +1,7 @@
 ---
 name: create-runbook
-description: Redacta un runbook nuevo desde los síntomas y las ejecuciones conocidas de un ticket, con validación antes de abrir PR.
-when_to_use: cuando triage levanta un ticket que es un caso de procedimiento conocido, cuando un operador necesita documentar una solución después de resolver un incidente, o cuando `mem_runbook_find` devuelve un runbook cuyo procedimiento quedó inactual tras cambios en la infraestructura.
+description: Drafts a new runbook from the symptoms and known executions of a ticket, with validation before opening a PR.
+when_to_use: when triage raises a ticket that is a known procedure case, when an operator needs to document a solution after resolving an incident, or when `mem_runbook_find` returns a runbook whose procedure went stale after infrastructure changes.
 allowed-tools: Read, Edit, Bash(memory project *), Bash(.claude/skills/create-runbook/scripts/next-runbook-id.sh), Bash(.claude/skills/create-runbook/scripts/instantiate-runbook.sh), Bash(.claude/skills/create-runbook/scripts/validate-runbook.sh), mcp__mcp-atlassian__jira_get_issue, mcp__cloudfrog-knowledge__search, mcp__cloudfrog-knowledge__search_by_metadata, mcp__plugin_memory_memory__mem_search, mcp__plugin_memory_memory__mem_save, AskUserQuestion, open-pr
 disable-model-invocation: false
 user-invocable: true
@@ -10,123 +10,123 @@ argument-hint: "<TICKET-KEY[,TICKET-KEY…]> <pattern>"
 
 # create-runbook
 
-No confundir con `design-runbook`, la skill que traen algunos paquetes de
-contexto de servicio: esa documenta directamente en `cloudfrog-knowledge`, sin
-staging ni PR, el diagnóstico que ya resolvió `resolve-ticket`. Esta redacta el
-runbook curado del vault y sí exige staging, `validate-runbook.sh` y PR humano
-(D-11).
+Not to be confused with `design-runbook`, the skill that some service context
+packages ship: that one documents directly in `cloudfrog-knowledge`, with no
+staging or PR, the diagnosis that `resolve-ticket` already resolved. This one drafts
+the vault's curated runbook and does require staging, `validate-runbook.sh` and a
+human PR (D-11).
 
-Redacta un runbook nuevo en ≤ 15 minutos con confirmación humana del diagnóstico.
+Draft a new runbook in ≤ 15 minutes with human confirmation of the diagnosis.
 
-## Cuándo NO correr esto
+## When NOT to run this
 
-- Si el síntoma ya está documentado en `mem_runbook_find`, esta skill no sirve para renovarlo: el vault se edita por PR humano (D-11). Usa `open-pr` con el archivo específico del vault si necesitas cambios.
-- Si el ticket es un incidente puntual sin patrón repetible, no es un runbook: es un registro histórico de la resolución en memory (`mem_save` con `type: incident`).
-- Si el pattern aún no está en el enum de la plantilla (`missing-files`, `auth-access`, `file-save-failure`, `sync-upload`, `registration-subscription`, `other`), elige el más cercano o declara `other` y documenta qué patrón hace falta.
+- If the symptom is already documented in `mem_runbook_find`, this skill is not the way to renew it: the vault is edited through a human PR (D-11). Use `open-pr` with the specific vault file if you need changes.
+- If the ticket is a one-off incident with no repeatable pattern, it is not a runbook: it is a historical record of the resolution in memory (`mem_save` with `type: incident`).
+- If the pattern is not yet in the template's enum (`missing-files`, `auth-access`, `file-save-failure`, `sync-upload`, `registration-subscription`, `other`), pick the closest one or declare `other` and document which pattern is needed.
 
-## Pasos
+## Steps
 
-### 1. Entrada y síntomas literales (minuto 0–2)
+### 1. Input and literal symptoms (minute 0–2)
 
-1. Lee el ticket con `jira_get_issue(KEY, comment_limit=20)` y extrae: síntomas reportados, país afectado, partner (si aplica), `issue_type`.
-2. Toma nota del KEY para usar más adelante (`jira_refs`).
+1. Read the ticket with `jira_get_issue(KEY, comment_limit=20)` and extract: reported symptoms, affected country, partner (if applicable), `issue_type`.
+2. Note the KEY for later use (`jira_refs`).
 
-### 2. Causa raíz conocida y ejecuciones previas (minuto 2–4)
+### 2. Known root cause and previous executions (minute 2–4)
 
-1. Busca en memory: `mem_search(incident/<KEY>)` para ver si hay un incidente anterior con el mismo síntoma.
-2. Busca en el knowledge: `search(query=<síntomas del ticket>)` para encontrar runbooks por síntoma, y `search_by_metadata(type="runbook")` para la lista completa (responde `{total, offset, items}`: lee `items` y pide la página siguiente con `offset` mientras `offset + len(items) < total`).
-3. Si encuentras un runbook candidato, contrasta: ¿el procedimiento funciona todavía? ¿Los pasos de resolución siguen siendo válidos? Si no, delega en `open-pr` para actualizar el existente en lugar de crear uno nuevo.
+1. Search memory: `mem_search(incident/<KEY>)` to see whether there is a previous incident with the same symptom.
+2. Search the knowledge server: `search(query=<ticket symptoms>)` to find runbooks by symptom, and `search_by_metadata(type="runbook")` for the full list (it answers `{total, offset, items}`: read `items` and ask for the next page with `offset` while `offset + len(items) < total`).
+3. If you find a candidate runbook, cross-check it: does the procedure still work? Are the resolution steps still valid? If not, delegate to `open-pr` to update the existing one instead of creating a new one.
 
-### 3. Reservar id (minuto 4–5)
+### 3. Reserve an id (minute 4–5)
 
-1. Ejecuta `.claude/skills/create-runbook/scripts/next-runbook-id.sh` (sin argumentos).
-2. Guarda el `RB-NNN` que devuelve.
+1. Run `.claude/skills/create-runbook/scripts/next-runbook-id.sh` (no arguments).
+2. Keep the `RB-NNN` it returns.
 
-### 4. Redacción en staging (minuto 5–9) — FRONTERA CON EL VAULT
+### 4. Drafting in staging (minute 5–9) — BOUNDARY WITH THE VAULT
 
-**AQUÍ OCURRE EL CONFLICTO CON `guard-vault-write.sh`:**
+**HERE IS WHERE THE CONFLICT WITH `guard-vault-write.sh` HAPPENS:**
 
-El hook `guard-vault-write.sh` (PreToolUse sobre Write|Edit) bloquea cualquier escritura bajo los clones de vault (`~/Projects/Vaults/<slug>/`, o `KNOWLEDGE_VAULTS_ROOT`) excepto `90 - Memory/`. La razón: el vault es contenido curado por personas, no por agentes (ADR D-11), y vive en su propio repositorio, no en este. La sección 6 de la plantilla-runbook.md dice escribir directamente bajo `Runbooks/` del vault, pero ese destino está prohibido por el hook.
+The `guard-vault-write.sh` hook (PreToolUse on Write|Edit) blocks any write under the vault clones (`~/Projects/Vaults/<slug>/`, or `KNOWLEDGE_VAULTS_ROOT`) except `90 - Memory/`. The reason: the vault is content curated by people, not by agents (ADR D-11), and it lives in its own repository, not in this one. Section 6 of plantilla-runbook.md says to write directly under the vault's `Runbooks/`, but that destination is forbidden by the hook.
 
-**Resolución:** El documento se redacta en una **ruta de staging**, FUERA del vault:
+**Resolution:** The document is drafted in a **staging path**, OUTSIDE the vault:
 
 ```
 $MEMORY_PROJECT_STAGING/create-runbook/RB-NNN <Title>.md
 ```
 
-(Por defecto: `$HOME/.local/share/knowledge/staging/create-runbook/`)
+(By default: `$HOME/.local/share/knowledge/staging/create-runbook/`)
 
-1. Ejecuta `.claude/skills/create-runbook/scripts/instantiate-runbook.sh --id <RB-NNN> --pattern <pattern> --out-dir "$MEMORY_PROJECT_STAGING/create-runbook" --title "<título>" --jira-refs <KEY> [--fixture <ticket.json>]`. El script lee los defaults del `pattern` desde `create-runbook/patterns/<pattern>.md` (categoría, servicio, `tools[]`, `evidence_required[]` y el `knowledge_ref` a la plantilla por categoría — ADR-032 punto 3), extrae el esqueleto literal de `ai-platform-plan/05-runbooks/plantilla-runbook.md` sección 3 y sustituye cada variable del frontmatter por un valor real (nunca deja un `{{...}}` sin resolver ahí: no sería YAML válido). Los síntomas, el país y las referencias de Jira vienen del ticket leído en el paso 1 (o del fixture, si se está ensayando).
-2. Añade a mano los pasos del diagnóstico (`{{quick_step}}`, `{{mutating_step}}`, `{{validation_command}}`, ...) y la causa raíz confirmada: esas variables del CUERPO se dejan sin resolver a propósito — necesitan el diagnóstico humano del paso siguiente, y `validate-runbook.sh` check 9 las espera ahí.
-3. El archivo ya nace en staging con `status: draft`. No toca el vault.
-4. Nota: El documento irá al vault cuando una persona ejecute los scripts de aplicación (paso siguiente en el flujo operativo, no en esta skill).
+1. Run `.claude/skills/create-runbook/scripts/instantiate-runbook.sh --id <RB-NNN> --pattern <pattern> --out-dir "$MEMORY_PROJECT_STAGING/create-runbook" --title "<title>" --jira-refs <KEY> [--fixture <ticket.json>]`. The script reads the `pattern` defaults from `create-runbook/patterns/<pattern>.md` (category, service, `tools[]`, `evidence_required[]` and the `knowledge_ref` to the per-category template — ADR-032 point 3), extracts the literal skeleton from `ai-platform-plan/05-runbooks/plantilla-runbook.md` section 3 and replaces every frontmatter variable with a real value (it never leaves an unresolved `{{...}}` there: it would not be valid YAML). The symptoms, country and Jira references come from the ticket read in step 1 (or from the fixture, when rehearsing).
+2. Add by hand the diagnosis steps (`{{quick_step}}`, `{{mutating_step}}`, `{{validation_command}}`, ...) and the confirmed root cause: those BODY variables are left unresolved on purpose — they need the human diagnosis of the next step, and `validate-runbook.sh` check 9 expects them there.
+3. The file is born in staging with `status: draft`. It does not touch the vault.
+4. Note: The document will go to the vault when a person runs the apply scripts (next step in the operational flow, not in this skill).
 
-### 5. Confirmación humana del diagnóstico y los pasos (minuto 9–11)
+### 5. Human confirmation of the diagnosis and the steps (minute 9–11)
 
-1. Presenta el documento draft a la persona con `AskUserQuestion`:
-   - "¿El diagnóstico y los pasos coinciden con lo que resolvió el incidente?"
-   - "¿Falta algún paso? ¿Alguno es incorrecto o demasiado específico?"
-   - "¿El procedimiento sigue siendo válido en el código/infra actual?"
-2. Incorpora ajustes si los hay. Vuelve a guardar en staging.
+1. Present the draft document to the person with `AskUserQuestion`:
+   - "Do the diagnosis and the steps match what resolved the incident?"
+   - "Is any step missing? Is any incorrect or too specific?"
+   - "Is the procedure still valid in the current code/infra?"
+2. Incorporate adjustments if there are any. Save to staging again.
 
-### 6. Validación (minuto 11–12)
+### 6. Validation (minute 11–12)
 
-1. Ejecuta `.claude/skills/create-runbook/scripts/validate-runbook.sh <archivo-en-staging>`.
-2. Si exit 0, continúa. Si no, reporta los errores a la persona y repite los ajustes.
-3. Los checks del validador incluyen: frontmatter YAML completo con enums, id único en el vault, síntomas y referencias, herramientas conocidas, secciones en orden, bloques mermaid, pasos [GATE] con rollback, sin PII, idioma, etc.
+1. Run `.claude/skills/create-runbook/scripts/validate-runbook.sh <staging-file>`.
+2. If exit 0, continue. If not, report the errors to the person and repeat the adjustments.
+3. The validator's checks include: complete YAML frontmatter with enums, unique id in the vault, symptoms and references, known tools, sections in order, mermaid blocks, [GATE] steps with rollback, no PII, language, etc.
 
-### 7. Preparación del índice y PR (minuto 12–14)
+### 7. Index and PR preparation (minute 12–14)
 
-1. Agrega una fila a la tabla de `Runbooks.md` del vault (el index). No edites el vault todavía; prepara la fila en staging.
-2. Si el `pattern` es nuevo (no aparece en `Issue Patterns from Jira.md` del vault), actualiza ese documento también en staging.
-3. Redacta el cuerpo del PR con el título `docs(runbooks): add RB-NNN <slug>` y el changelog.
-4. **Delega el resto en `open-pr`**: esa skill maneja el PR contra `main` de `knowledge` en la rama `docs/rb-nnn-<slug>`. Ella abre, asigna revisor y notifica.
-5. Nota: El merge del PR es paso manual, humano.
+1. Add a row to the table of the vault's `Runbooks.md` (the index). Do not edit the vault yet; prepare the row in staging.
+2. If the `pattern` is new (it does not appear in the vault's `Issue Patterns from Jira.md`), update that document as well in staging.
+3. Write the PR body with the title `docs(runbooks): add RB-NNN <slug>` and the changelog.
+4. **Delegate the rest to `open-pr`**: that skill handles the PR against `main` of `knowledge` on the branch `docs/rb-nnn-<slug>`. It opens it, assigns a reviewer and notifies.
+5. Note: Merging the PR is a manual, human step.
 
-### 8. Aplicación del documento al vault (paso manual, después del PR)
+### 8. Applying the document to the vault (manual step, after the PR)
 
-**Esta parte NO la ejecuta esta skill.** Se describe aquí por completitud:
+**This skill does NOT run this part.** It is described here for completeness:
 
-Cuando el PR está aprobado y fusionado, una persona ejecuta (fuera del agente):
+When the PR is approved and merged, a person runs (outside the agent):
 
 ```bash
 cd ai-architecture/ai-platform-plan/05-runbooks/migracion/
 bash scripts/aplicar-migracion.sh --apply
 ```
 
-(O usando el patrón específico en `create-runbook/staging/` si hay documentos nuevos listos.)
+(Or using the specific pattern in `create-runbook/staging/` if there are new documents ready.)
 
-Este script:
-- Valida que el documento en staging cumpla todos los checks.
-- Copia el documento de staging a `Runbooks/<Category>/RB-NNN <Title>.md` del clon del repositorio del vault (`MEMORY_VAULT_ROOT`).
-- Actualiza el índice en el vault.
-- No confirma ni abre otro PR: deja los cambios en el árbol de trabajo.
+This script:
+- Validates that the staging document passes all the checks.
+- Copies the staging document to `Runbooks/<Category>/RB-NNN <Title>.md` in the clone of the vault repository (`MEMORY_VAULT_ROOT`).
+- Updates the index in the vault.
+- Does not commit or open another PR: it leaves the changes in the working tree.
 
-Luego la persona hace `git add`, `git commit`, `git push` manualmente.
+Then the person runs `git add`, `git commit`, `git push` manually.
 
-### 9. Memoria (minuto 14–15)
+### 9. Memory (minute 14–15)
 
-1. Ejecuta `mem_save` con:
+1. Run `mem_save` with:
    - `type: architecture`
    - `topic_key: runbook/RB-NNN`
-   - `project: <service>` (el `service` del frontmatter)
-   - Contenido: síntomas, causa raíz, refs de Jira, fecha de creación, nombre de quien lo redactó.
+   - `project: <service>` (the `service` from the frontmatter)
+   - Content: symptoms, root cause, Jira refs, creation date, name of whoever drafted it.
 
-## Herramientas y cómo se usan
+## Tools and how they are used
 
-| Herramienta | Paso | Notas |
+| Tool | Step | Notes |
 |---|---|---|
-| `jira_get_issue` | 1 | Lee ticket con `comment_limit: 20` para contexto y decisiones previas |
-| `mem_search`, `search`, `search_by_metadata` | 2 | Busca runbooks existentes; no escribe |
-| `next-runbook-id.sh` | 3 | Script local; escanea el vault y devuelve `RB-NNN` libre (bash 3.2 compatible) |
-| `instantiate-runbook.sh` | 4 | Script local; instancia la plantilla con los defaults de `patterns/<pattern>.md` en `$MEMORY_PROJECT_STAGING/create-runbook/`, **nunca en el vault** (rechaza con exit 3 si `--out-dir` resuelve dentro de él) |
-| `Edit` (staging) | 4 | Rellena a mano las variables del diagnóstico que el script deja pendientes en el cuerpo |
-| `AskUserQuestion` | 5 | Obtiene confirmación de diagnóstico |
-| `validate-runbook.sh` | 6 | Script local; 12 checks contra plantilla; exit 0 o 1 |
-| `open-pr` | 7 | Delega; abre el PR en el repositorio del vault, con el dueño como revisor |
-| `mem_save` | 9 | Registra en memory bajo `runbook/RB-NNN` |
+| `jira_get_issue` | 1 | Reads the ticket with `comment_limit: 20` for context and previous decisions |
+| `mem_search`, `search`, `search_by_metadata` | 2 | Searches existing runbooks; does not write |
+| `next-runbook-id.sh` | 3 | Local script; scans the vault and returns a free `RB-NNN` (bash 3.2 compatible) |
+| `instantiate-runbook.sh` | 4 | Local script; instantiates the template with the defaults of `patterns/<pattern>.md` in `$MEMORY_PROJECT_STAGING/create-runbook/`, **never in the vault** (it rejects with exit 3 if `--out-dir` resolves inside it) |
+| `Edit` (staging) | 4 | Fills in by hand the diagnosis variables that the script leaves pending in the body |
+| `AskUserQuestion` | 5 | Obtains confirmation of the diagnosis |
+| `validate-runbook.sh` | 6 | Local script; 12 checks against the template; exit 0 or 1 |
+| `open-pr` | 7 | Delegates; opens the PR in the vault repository, with the owner as reviewer |
+| `mem_save` | 9 | Records in memory under `runbook/RB-NNN` |
 
-## El hook `guard-vault-write.sh` y por qué existe
+## The `guard-vault-write.sh` hook and why it exists
 
 ```bash
 case "$path" in
@@ -137,26 +137,26 @@ case "$path" in
 esac
 ```
 
-**Por qué:** Cada vault (un repositorio propio, clonado bajo `~/Projects/Vaults/<slug>/`) es un corpus curado por personas, no por agentes. La única excepción es `90 - Memory/`, donde el puente automático de memory escribe. Cualquier otra ruta requiere un PR humano revisado. Ver ADR-011 (D-11).
+**Why:** Each vault (a repository of its own, cloned under `~/Projects/Vaults/<slug>/`) is a corpus curated by people, not by agents. The only exception is `90 - Memory/`, where the automatic memory bridge writes. Any other path requires a reviewed human PR. See ADR-011 (D-11).
 
-**Implicación para esta skill:** Todos los runbooks, índices y patrones van en staging y se aplican vía PR humana. El hook no es un problema que "burlar" o "eludir": es una política de calidad curada. Esta skill la respeta.
+**Implication for this skill:** All runbooks, indexes and patterns go to staging and are applied through a human PR. The hook is not a problem to "get around" or "bypass": it is a curation quality policy. This skill respects it.
 
-## Ruta de staging
+## Staging path
 
-Por defecto, `$HOME/.local/share/knowledge/staging/create-runbook/`. Se controla con `MEMORY_PROJECT_STAGING`.
+By default, `$HOME/.local/share/knowledge/staging/create-runbook/`. It is controlled with `MEMORY_PROJECT_STAGING`.
 
 ```bash
 mkdir -p "$MEMORY_PROJECT_STAGING/create-runbook"
 echo "# RB-001: ..." > "$MEMORY_PROJECT_STAGING/create-runbook/RB-001 Title.md"
 ```
 
-## Patrón elegido para Runbooks (ver migracion/README.md)
+## Chosen pattern for Runbooks (see migracion/README.md)
 
-Esta skill sigue el patrón consolidado en `ai-platform-plan/05-runbooks/migracion/`:
+This skill follows the pattern consolidated in `ai-platform-plan/05-runbooks/migracion/`:
 
-1. **Redacción en staging.** El agente prepara documentos fuera del vault.
-2. **Validación completa.** Los scripts (`next-runbook-id.sh`, `validate-runbook.sh`) corren antes de cualquier aplicación.
-3. **Confirmación humana.** Una persona revisa y ejecuta `aplicar-migracion.sh --apply`.
-4. **PR auditado.** La cadena final (push + PR) queda como un cambio humano.
+1. **Drafting in staging.** The agent prepares documents outside the vault.
+2. **Full validation.** The scripts (`next-runbook-id.sh`, `validate-runbook.sh`) run before any application.
+3. **Human confirmation.** A person reviews and runs `aplicar-migracion.sh --apply`.
+4. **Audited PR.** The final chain (push + PR) remains a human change.
 
-No hay atajo: es el precio de un vault curado.
+There is no shortcut: it is the price of a curated vault.
