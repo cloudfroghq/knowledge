@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest an improvement that does not change a tool's response shape.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If your proposal changes the response shape of a tool, use the "Tool contract change" template instead.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Tools / search
+        - CLI
+        - Indexing / storage
+        - HTTP / auth
+        - Plugin
+        - npm wrapper
+        - Docs
+        - Other
+    validations:
+      required: true

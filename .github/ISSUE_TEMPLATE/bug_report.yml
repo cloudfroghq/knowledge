@@ -1,0 +1,100 @@
+name: Bug report
+description: Something in the server, CLI, plugin or npm wrapper does not work as documented.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. For security vulnerabilities do not use this form; see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `knowledge --version`.
+      placeholder: "0.9.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - PyPI / uvx
+        - npm / npx
+        - Claude Code plugin
+        - Docker
+        - From source
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options:
+        - stdio
+        - http
+    validations:
+      required: true
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Tool profile
+      options:
+        - all (default)
+        - legacy
+    validations:
+      required: true
+  - type: input
+    id: features
+    attributes:
+      label: Vault features in use
+      description: The `features` your served vaults declare in `vault.yaml`, or "none".
+      placeholder: flows, governance, confluence, jira, memory-bridge, git-webhook
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Ubuntu 24.04 / macOS 15 / Windows 11
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.12.x"
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: doctor output
+      description: Output of `cloudfrog-knowledge doctor --brief` (or the full `doctor` JSON). Include whether `vector_backend` is `sqlite-vec` or `python`.
+      render: shell
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Prefer a reproduction against `tests/fixtures/vault/`, not a private vault.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the stable error code (`E_...`) and any relevant log lines.
+    validations:
+      required: true
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Redaction
+      options:
+        - label: I removed tokens, API keys and private content from the logs and output above.
+          required: true

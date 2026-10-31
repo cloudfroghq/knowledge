@@ -1,0 +1,56 @@
+name: Tool contract change
+description: Propose a change to the response shape, parameters or catalog of an MCP tool.
+title: "contract: "
+labels: ["contract"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The tool contract is versioned strictly (`src/knowledge/contract.py`, `docs/contract/CHANGELOG.md`). Any change to a response shape needs a declared contract version, regenerated goldens and a regenerated `docs/tools/inventory.md`.
+  - type: input
+    id: tools
+    attributes:
+      label: Affected tools
+      placeholder: search, get_document
+    validations:
+      required: true
+  - type: textarea
+    id: old_shape
+    attributes:
+      label: Current shape
+      description: Keys, parameters and defaults today (a sample response is ideal).
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: new_shape
+    attributes:
+      label: Proposed shape
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Why
+      description: The problem this solves and who needs it.
+    validations:
+      required: true
+  - type: dropdown
+    id: bump
+    attributes:
+      label: Proposed contract version bump
+      description: Additive changes (new optional keys or parameters) are a minor bump; removing or retyping anything is a major bump.
+      options:
+        - Minor (additive)
+        - Major (breaking)
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: migration
+    attributes:
+      label: Migration notes
+      description: What clients that cache the current catalog or parse the current shape must do. Say whether a deprecation window is needed.
+    validations:
+      required: true
