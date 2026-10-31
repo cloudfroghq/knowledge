@@ -1,10 +1,10 @@
-# Promover páginas de Confluence al vault
+# Promote Confluence pages into the vault
 
-Runbook para quien mantiene un vault cuyas convenciones nacen en Confluence. El servidor no escribe en ningún vault (D-11, `docs/adr/ADR-044.md`): `sync_confluence` solo informa qué está desactualizado y `cloudfrog-knowledge confluence export` escribe las páginas fuera del vault. El contenido entra al vault por un PR humano con el dueño como revisor.
+Runbook for whoever maintains a vault whose conventions originate in Confluence. The server does not write to any vault (D-11, [`docs/adr/ADR-044.md`](../adr/ADR-044.md)): `sync_confluence` only reports what is out of date, and `cloudfrog-knowledge confluence export` writes the pages outside the vault. Content enters the vault through a human PR with the owner as reviewer.
 
-## 1. Credenciales
+## 1. Credentials
 
-El vault las declara en su `vault.yaml`, por nombre de variable, nunca por valor:
+The vault declares them in its `vault.yaml`, by variable name, never by value:
 
 ```yaml
 integrations:
@@ -13,32 +13,32 @@ integrations:
     secrets: { email_env: ACME_CONFLUENCE_EMAIL, token_env: ACME_CONFLUENCE_TOKEN }
 ```
 
-Lo que `integrations.confluence` no declara sale de `CONFLUENCE_URL`, `CONFLUENCE_EMAIL` y `CONFLUENCE_TOKEN`. Un valor con forma de credencial dentro de `vault.yaml` se rechaza con `E_SECRET_IN_MANIFEST`.
+Whatever `integrations.confluence` does not declare comes from `CONFLUENCE_URL`, `CONFLUENCE_EMAIL` and `CONFLUENCE_TOKEN`. A value shaped like a credential inside `vault.yaml` is rejected with `E_SECRET_IN_MANIFEST`.
 
-`site` y `CONFLUENCE_URL` son la raíz del sitio, `https://<org>.atlassian.net`, **sin** `/wiki`: el cliente añade `/wiki/api/v2/pages/<id>` por su cuenta. Con `/wiki` al final el servidor pide `/wiki/wiki/api/v2/...`, cada página responde 404 y `confluence export` (igual que `sync_confluence`) las deja todas en `errors`, sin escribir ninguna. La URL que usa `mcp-atlassian` (`https://<org>.atlassian.net/wiki`) no sirve aquí.
+`site` and `CONFLUENCE_URL` are the site root, `https://<org>.atlassian.net`, **without** `/wiki`: the client appends `/wiki/api/v2/pages/<id>` on its own. With a trailing `/wiki` the server requests `/wiki/wiki/api/v2/...`, every page responds 404, and `confluence export` (like `sync_confluence`) leaves all of them in `errors` without writing any. The URL that `mcp-atlassian` uses (`https://<org>.atlassian.net/wiki`) does not work here.
 
-El vault es contenido curado, así que solo puede apuntar a variables de Confluence que sean suyas: `site` debe ser `https` en `*.atlassian.net` o en un host que el operador liste en `KNOWLEDGE_INTEGRATION_SITES` (`http` solo en `127.0.0.1`, `localhost` o `::1`), y `email_env` y `token_env` deben estar en mayúsculas, llevar `CONFLUENCE` como segmento, terminar en `_EMAIL` y `_TOKEN` y empezar con el `slug` del vault en mayúsculas (`ACME_CONFLUENCE_TOKEN` para `acme`). Solo el vault por defecto puede usar los nombres sin prefijo (`CONFLUENCE_TOKEN`), y un vault que no es el por defecto y declara `site` debe nombrar las dos variables. Cualquier otro nombre, como `MCP_ADMIN_KEY`, `OPENAI_API_KEY` o el de otro vault, detiene el arranque y `confluence export` con `E_MANIFEST_INVALID` y la ruta de la clave, antes de leer ninguna variable: así ningún secreto del servidor ni de otro vault viaja al sitio que declara un vault.
+The vault is curated content, so it may only point to Confluence variables that are its own: `site` must be `https` on `*.atlassian.net` or on a host the operator lists in `KNOWLEDGE_INTEGRATION_SITES` (`http` only on `127.0.0.1`, `localhost` or `::1`), and `email_env` and `token_env` must be uppercase, contain `CONFLUENCE` as a segment, end in `_EMAIL` and `_TOKEN`, and start with the vault's `slug` in uppercase (`ACME_CONFLUENCE_TOKEN` for `acme`). Only the default vault may use the unprefixed names (`CONFLUENCE_TOKEN`), and a vault that is not the default and declares `site` must name both variables. Any other name, such as `MCP_ADMIN_KEY`, `OPENAI_API_KEY` or another vault's variable, stops startup and `confluence export` with `E_MANIFEST_INVALID` and the key path, before any variable is read: this way no secret of the server or of another vault travels to the site a vault declares.
 
-## 2. Ver qué está desactualizado
+## 2. See what is out of date
 
-Desde un cliente MCP, `sync_confluence()` (con `dry_run=True`, el valor por omisión) lista en `needs_update` los archivos bajo `scope_prefix` (`Conventions/` por omisión) cuya página es más nueva. `sync_confluence(dry_run=False)` responde `E_WRITE_FENCED` y no lee ni escribe nada.
+From an MCP client, `sync_confluence()` (with `dry_run=True`, the default) lists in `needs_update` the files under `scope_prefix` (`Conventions/` by default) whose page is newer. `sync_confluence(dry_run=False)` responds `E_WRITE_FENCED` and neither reads nor writes anything.
 
-## 3. Exportar fuera del vault
+## 3. Export outside the vault
 
 ```bash
 cloudfrog-knowledge confluence export --vault acme --out ~/confluence-export/acme --dry-run
 cloudfrog-knowledge confluence export --vault acme --out ~/confluence-export/acme
 ```
 
-- Cada archivo desactualizado queda en `<out>/<ruta relativa al vault>`, con el frontmatter del vault y `last_updated` del día en que cambió la página.
-- Un `--out` dentro de cualquier vault servido, o un archivo que resuelva dentro de uno por un symlink, termina con `E_WRITE_FENCED` (código 2) sin escribir.
-- Sin credenciales, `E_SECRET_MISSING` nombra las variables que faltan (código 2).
-- La salida es un JSON con `written`, `unchanged` y `errors`; con algún error el código es 1. Una página que no se puede leer, convertir o escribir queda en `errors` como `{confluence_id, file, error}` y las demás se exportan igual.
-- Un fallo del sistema de archivos fuera de una página (leer el vault, por ejemplo) termina con `E_EXPORT_FAILED` (código 2) y una sola línea en stderr.
+- Each out-of-date file lands at `<out>/<path relative to the vault>`, with the vault's frontmatter and `last_updated` set to the day the page changed.
+- An `--out` inside any served vault, or a file that resolves inside one through a symlink, ends with `E_WRITE_FENCED` (exit code 2) without writing.
+- Without credentials, `E_SECRET_MISSING` names the missing variables (exit code 2).
+- The output is JSON with `written`, `unchanged` and `errors`; with any error the exit code is 1. A page that cannot be read, converted or written lands in `errors` as `{confluence_id, file, error}` and the rest are exported anyway.
+- A filesystem failure outside a specific page (reading the vault, for example) ends with `E_EXPORT_FAILED` (exit code 2) and a single line on stderr.
 
-## 4. Promover por PR
+## 4. Promote through a PR
 
-1. En el checkout del repositorio del vault: `git switch -c docs/confluence-<fecha>`.
-2. Copia los archivos de `written` desde `<out>` a la misma ruta del vault y revisa el diff: el cuerpo viene de una conversión básica de HTML a Markdown, así que tablas y macros pueden necesitar retoque.
-3. `cloudfrog-knowledge vault-lint <vault>` sin errores nuevos.
-4. Commit, push y PR con el dueño del vault como revisor. Al mergear, el webhook del vault reindexa.
+1. In the checkout of the vault's repository: `git switch -c docs/confluence-<date>`.
+2. Copy the files listed in `written` from `<out>` to the same path in the vault and review the diff: the body comes from a basic HTML-to-Markdown conversion, so tables and macros may need touching up.
+3. `cloudfrog-knowledge vault-lint <vault>` with no new errors.
+4. Commit, push and open a PR with the vault owner as reviewer. When it is merged, the vault's webhook reindexes.

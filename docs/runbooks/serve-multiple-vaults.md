@@ -1,158 +1,158 @@
-# Servir varios vaults con un solo servidor
+# Serve several vaults with a single server
 
-Runbook para quien despliega o mueve instancias de `cloudfrog-knowledge`. Un proceso puede servir un vault (modo de compatibilidad) o varios (registro `vaults.yaml`). En despliegue, cada instancia corre `infra/compose.yml` con su propio entorno: sus vaults, su índice, sus deploy keys y su secreto de webhook. Lo propio de cada despliegue (dominio, aplicación en la plataforma, claves por nombre, rollback) se documenta en su vault, en `Deploy/`.
+Runbook for whoever deploys or moves `cloudfrog-knowledge` instances. A process can serve one vault (compatibility mode) or several (the `vaults.yaml` registry). In a deployment, each instance runs `infra/compose.yml` with its own environment: its vaults, its index, its deploy keys and its webhook secret. What is specific to each deployment (domain, application on the platform, keys by name, rollback) is documented in its vault, under `Deploy/`.
 
-## 1. Modos de descubrimiento
+## 1. Discovery modes
 
-El servidor decide qué sirve en este orden; gana el primero que exista:
+The server decides what it serves in this order; the first one that exists wins:
 
-1. `KNOWLEDGE_VAULTS`: ruta a un `vaults.yaml` (relativa al checkout). Si el archivo no existe, el arranque falla con `E_VAULTS_FILE_MISSING`.
-2. `VAULT_PATH`: modo de compatibilidad, un solo vault. Si además hay `KNOWLEDGE_VAULTS` y `VAULT_PATH` apunta a otro sitio, se avisa con `W_VAULT_PATH_IGNORED`.
-3. `vault_path` en el `config.json` que nombre `KNOWLEDGE_CONFIG_JSON`: mismo modo de compatibilidad. Este repositorio no trae ningún `config.json`, porque ningún vault vive aquí: en un checkout sin `VAULT_PATH` ni `KNOWLEDGE_VAULTS` gana la regla siguiente.
-4. `$XDG_CONFIG_HOME/knowledge/vaults.yaml` o `~/.config/knowledge/vaults.yaml`: solo si ninguna de las anteriores está definida. Sin este archivo tampoco, el arranque falla con `E_VAULT_PATH_MISSING`: no hay vault por omisión.
+1. `KNOWLEDGE_VAULTS`: path to a `vaults.yaml` (relative to the checkout). If the file does not exist, startup fails with `E_VAULTS_FILE_MISSING`.
+2. `VAULT_PATH`: compatibility mode, a single vault. If `KNOWLEDGE_VAULTS` is also set and `VAULT_PATH` points somewhere else, a `W_VAULT_PATH_IGNORED` warning is emitted.
+3. `vault_path` in the `config.json` named by `KNOWLEDGE_CONFIG_JSON`: the same compatibility mode. This repository ships no `config.json`, because no vault lives here: in a checkout with neither `VAULT_PATH` nor `KNOWLEDGE_VAULTS`, the next rule wins.
+4. `$XDG_CONFIG_HOME/knowledge/vaults.yaml` or `~/.config/knowledge/vaults.yaml`: only if none of the above is defined. Without this file either, startup fails with `E_VAULT_PATH_MISSING`: there is no default vault.
 
-`KNOWLEDGE_VAULTS`, `VAULT_PATH`, `KNOWLEDGE_INDEX_DIR`, `CHROMA_PERSIST_DIR`, `KNOWLEDGE_HOME`, `KNOWLEDGE_CONFIG_JSON` y `KNOWLEDGE_EMBEDDINGS_PROVIDER` vacías se leen como ausentes.
+`KNOWLEDGE_VAULTS`, `VAULT_PATH`, `KNOWLEDGE_INDEX_DIR`, `CHROMA_PERSIST_DIR`, `KNOWLEDGE_HOME`, `KNOWLEDGE_CONFIG_JSON` and `KNOWLEDGE_EMBEDDINGS_PROVIDER` are read as absent when empty.
 
-## 2. Dónde vive el índice
+## 2. Where the index lives
 
-Cada vault tiene un directorio de índice con `index.sqlite` (documentos, chunks, FTS5 y vectores) y sus sidecars: `link_graph.json`, `usage_stats.json`, `index_meta.json` y `skipped_files.json`.
+Each vault has an index directory with `index.sqlite` (documents, chunks, FTS5 and vectors) and its sidecars: `link_graph.json`, `usage_stats.json`, `index_meta.json` and `skipped_files.json`.
 
-- Modo de compatibilidad: `KNOWLEDGE_INDEX_DIR` > `CHROMA_PERSIST_DIR` > `KNOWLEDGE_HOME/<slug>` (solo si `KNOWLEDGE_HOME` está definida y no vacía) > `<raíz>/.data/<slug>`. El slug sale de `CHROMA_COLLECTION` (en blanco se lee como ausente); sin ella, de `chroma_collection` del `config.json`; sin él, del `slug` del `vault.yaml` del directorio (solo si es un slug válido, porque arma rutas); y sin nada de eso es `vault`, un nombre que no es de ningún tenant. Con el slug del `vault.yaml`, las variables de credencial que el vault nombra (`ACME_TYPESAFE_API_KEY` en un vault `acme`) coinciden con el vault servido. Con `CHROMA_PERSIST_DIR`, `index.sqlite` vive junto a `chroma.sqlite3`, en el mismo volumen.
-- Registro: `<data_dir>/<slug>`, con `data_dir` del `vaults.yaml` o `KNOWLEDGE_HOME`; sin ninguno, `$XDG_DATA_HOME/knowledge`.
-- La imagen fija `KNOWLEDGE_HOME=/data/index` y `CHROMA_PERSIST_DIR=/data/chroma`. Sin `KNOWLEDGE_INDEX_DIR` gana el segundo: el índice queda en `/data/chroma/index.sqlite`, junto a `chroma.sqlite3` y dentro del volumen que el compose monte ahí. Ese valor por omisión existe para los despliegues cuyo compose no está en este repo (ver la sección 7).
-- Los composes de `infra/` fijan `KNOWLEDGE_INDEX_DIR=/data/index/<slug>` sobre el volumen `knowledge-index`. Si tu compose monta el volumen de Chroma en `/data/chroma`, es solo origen de migración: el servidor no escribe ahí.
-- `cloudfrog-knowledge migrate-index` prepara el índice de cada vault sin embeber nada: copia `usage_stats.json` y los pesos aprendidos de `link_graph.json` desde el directorio donde vivía Chroma (`<data_dir>/<slug>/chroma`, `CHROMA_PERSIST_DIR` o `--from-chroma`) y deja el índice vacío; la primera tool (o el webhook) lo llena. Con `--prune-chroma` borra solo `chroma.sqlite3` y los directorios de segmentos de Chroma.
-- El entrypoint de la imagen (`infra/bootstrap-vault.sh`) corre `migrate-index` sin `--build` y luego `serve`, con el reporte de la migración en stderr. Un `index.sqlite` de un paquete más nuevo detiene el arranque con `E_INDEX_VERSION_NEWER`. Embeber queda para la primera tool o el webhook: con `openai` tarda uno o dos minutos y el `HEALTHCHECK` da 20 s de arranque.
-- `vector_backend` (en `doctor` y en `/health`) dice quién ordena los vectores: `sqlite-vec` o `python`. `python` significa que la extensión no carga en ese intérprete (un Python sin extensiones cargables, como el de python.org para macOS): el resultado es el mismo y cada consulta cuesta unos 110 ms en lugar de unos 10. La imagen corre sobre `python:3.12-slim-trixie` y carga la extensión; en stdio, `uvx --managed-python` usa un CPython de `uv`, que también la carga.
-- No hay instantánea del índice que exportar ni importar: el índice se reconstruye desde el vault. El repositorio no trae `scripts/export-data.sh` ni `import-data.sh`.
+- Compatibility mode: `KNOWLEDGE_INDEX_DIR` > `CHROMA_PERSIST_DIR` > `KNOWLEDGE_HOME/<slug>` (only if `KNOWLEDGE_HOME` is defined and non-empty) > `<root>/.data/<slug>`. The slug comes from `CHROMA_COLLECTION` (blank is read as absent); without it, from `chroma_collection` in `config.json`; without that, from the `slug` in the directory's `vault.yaml` (only if it is a valid slug, because it builds paths); and with none of those it is `vault`, a name that belongs to no tenant. With the slug from `vault.yaml`, the credential variables the vault names (`ACME_TYPESAFE_API_KEY` in a vault `acme`) match the vault being served. With `CHROMA_PERSIST_DIR`, `index.sqlite` lives next to `chroma.sqlite3`, on the same volume.
+- Registry: `<data_dir>/<slug>`, with `data_dir` from `vaults.yaml` or `KNOWLEDGE_HOME`; with neither, `$XDG_DATA_HOME/knowledge`.
+- The image sets `KNOWLEDGE_HOME=/data/index` and `CHROMA_PERSIST_DIR=/data/chroma`. Without `KNOWLEDGE_INDEX_DIR` the second wins: the index ends up at `/data/chroma/index.sqlite`, next to `chroma.sqlite3` and inside the volume the compose mounts there. That default exists for deployments whose compose is not in this repo (see section 7).
+- The composes in `infra/` set `KNOWLEDGE_INDEX_DIR=/data/index/<slug>` on the `knowledge-index` volume. If your compose mounts the Chroma volume at `/data/chroma`, it is only a migration source: the server does not write there.
+- `cloudfrog-knowledge migrate-index` prepares each vault's index without embedding anything: it copies `usage_stats.json` and the learned weights of `link_graph.json` from the directory where Chroma used to live (`<data_dir>/<slug>/chroma`, `CHROMA_PERSIST_DIR` or `--from-chroma`) and leaves the index empty; the first tool call (or the webhook) fills it. With `--prune-chroma` it deletes only `chroma.sqlite3` and Chroma's segment directories.
+- The image entrypoint (`infra/bootstrap-vault.sh`) runs `migrate-index` without `--build` and then `serve`, with the migration report on stderr. An `index.sqlite` from a newer package stops startup with `E_INDEX_VERSION_NEWER`. Embedding is left for the first tool call or the webhook: with `openai` it takes one or two minutes, and the `HEALTHCHECK` allows 20 s of startup.
+- `vector_backend` (in `doctor` and in `/health`) says what sorts the vectors: `sqlite-vec` or `python`. `python` means the extension does not load in that interpreter (a Python without loadable extensions, such as the python.org one for macOS): the result is the same and each query costs about 110 ms instead of about 10. The image runs on `python:3.12-slim-trixie` and loads the extension; over stdio, `uvx --managed-python` uses a `uv` CPython, which also loads it.
+- There is no index snapshot to export or import: the index is rebuilt from the vault. The repository ships neither `scripts/export-data.sh` nor `import-data.sh`.
 
-## 3. Añadir un vault
+## 3. Add a vault
 
-1. Elige un `slug` que cumpla `^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$`. Nombra el directorio del índice y la colección, así que no lo cambies después.
-2. Añade una entrada a `vaults.yaml` (parte de `vaults.yaml.example`). `path` es obligatorio. `deploy_key_env`, `git` y `webhook` exigen `repo`.
-3. Nombra los secretos por variable de entorno (`deploy_key_env`, `webhook.secret_env`). Nunca los escribas en el archivo.
-4. Si el vault trae `vault.yaml`, su `slug` debe coincidir con el del registro.
-5. Valida sin arrancar nada:
+1. Choose a `slug` that matches `^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$`. It names the index directory and the collection, so do not change it afterwards.
+2. Add an entry to `vaults.yaml` (start from `vaults.yaml.example`). `path` is required. `deploy_key_env`, `git` and `webhook` require `repo`.
+3. Name secrets by environment variable (`deploy_key_env`, `webhook.secret_env`). Never write them in the file.
+4. If the vault ships a `vault.yaml`, its `slug` must match the registry's.
+5. Validate without starting anything:
 
 ```bash
-uv run cloudfrog-knowledge vault-lint <ruta-al-vault>              # reglas 1.3: las del vault
-uv run cloudfrog-knowledge vault-lint <ruta-al-vault> --rules 1.2  # las que cuenta reindex.validation
+uv run cloudfrog-knowledge vault-lint <path-to-vault>              # rules 1.3: the vault's rules
+uv run cloudfrog-knowledge vault-lint <path-to-vault> --rules 1.2  # the ones reindex.validation counts
 uv run python -c "from pathlib import Path; from knowledge.settings import parse_vaults_file; print(parse_vaults_file(Path('vaults.yaml'), check_paths=False))"
 ```
 
-## 4. Cuándo se ejecuta git
+## 4. When git runs
 
-Git solo corre si el vault declara un remoto. En el contenedor eso significa `VAULT_REMOTE` no vacío; en `vaults.yaml`, `repo` con `git.auto_pull` distinto de `false`.
+Git runs only if the vault declares a remote. In the container that means a non-empty `VAULT_REMOTE`; in `vaults.yaml`, `repo` with `git.auto_pull` other than `false`.
 
-- `VAULT_REMOTE` definido: `infra/bootstrap-vault.sh` crea o adopta el clon en `/data/vault-repo`, lo fuerza a `VAULT_BRANCH` y exige `GIT_DEPLOY_KEY_B64`. Sin clave sale con `E_DEPLOY_KEY_MISSING` (código 64) sin tocar git.
-- `VAULT_REMOTE` vacío: cero llamadas a git. El vault es lo que ya contiene el volumen.
-- El compose genérico guarda los clones en el volumen `knowledge-vaults` (`/data/vaults/<slug>`), de lectura y escritura. `90 - Memory` es la única carpeta donde el servidor escribe. La variante sin git, con el vault en un volumen de solo lectura, está en «Vault que llega como volumen».
-- Si `VAULT_PATH` no es un directorio, el arranque sale con `E_VAULT_PATH_NOT_DIR` y nombra la ruta, el remoto y la rama.
+- `VAULT_REMOTE` set: `infra/bootstrap-vault.sh` creates or adopts the clone at `/data/vault-repo`, forces it to `VAULT_BRANCH` and requires `GIT_DEPLOY_KEY_B64`. Without a key it exits with `E_DEPLOY_KEY_MISSING` (code 64) without touching git.
+- `VAULT_REMOTE` empty: zero git calls. The vault is whatever the volume already contains.
+- The generic compose keeps the clones in the `knowledge-vaults` volume (`/data/vaults/<slug>`), read-write. `90 - Memory` is the only folder where the server writes. The variant without git, with the vault on a read-only volume, is in "Vault delivered as a volume".
+- If `VAULT_PATH` is not a directory, startup exits with `E_VAULT_PATH_NOT_DIR` and names the path, the remote and the branch.
 
-## 5. Secretos por instancia
+## 5. Secrets per instance
 
-Cada instancia define los suyos en su entorno; ninguno se comparte entre instancias de organizaciones distintas:
+Each instance defines its own in its environment; none is shared between instances of different organizations:
 
-| Variable | Qué es |
+| Variable | What it is |
 |---|---|
-| `GIT_DEPLOY_KEY_B64` | Deploy key de solo lectura registrada en el repo vault de esa organización, en base64. Solo hace falta con `VAULT_REMOTE`. |
-| `MCP_WEBHOOK_SECRET` | Secreto HMAC del webhook `push` de ese repo. Sin él, el webhook se rechaza y se avisa con `W_WEBHOOK_SECRET_MISSING`. |
-| `MCP_API_KEY` | Bearer del servidor. Sin `MCP_ADMIN_KEY` tiene los alcances `read` y `admin`; con ella, solo `read`. Sin ninguno de los dos (ni `bearers`), `E_HTTP_API_KEY_MISSING`. |
-| `MCP_ADMIN_KEY` | Opcional. Bearer con alcance `admin`, el único que puede llamar `reindex`, `sync_confluence` y `POST /webhook/reindex` con bearer manual. Distinta de `MCP_API_KEY`: si coinciden, `E_MANIFEST_INVALID`. |
-| `OPENAI_API_KEY` | Embeddings con el proveedor `openai`. Sin ella, `E_EMBEDDINGS_KEY_MISSING`. |
-| `<SLUG>_TYPESAFE_API_KEY` | Opcional. Clave del juez de `search` (rerank), con el nombre que declare el `rerank.key_env` del `vault.yaml` del vault (`ACME_TYPESAFE_API_KEY` para el slug `acme`); `TYPESAFE_API_KEY` solo vale para el vault por defecto. Si la plataforma guarda la clave bajo un nombre corto, el compose la copia al nombre del vault. Sin valor, `W_RERANK_KEY_MISSING` y ese vault busca sin juez. |
-| `CONFLUENCE_URL`, `CONFLUENCE_EMAIL`, `CONFLUENCE_TOKEN` | Solo con la extensión `confluence`. `CONFLUENCE_URL` es la raíz del sitio (`https://<org>.atlassian.net`), **sin** `/wiki`: el cliente añade `/wiki/api/v2` por su cuenta, y con `/wiki` al final todas las páginas responden 404 y quedan en `errors` de `sync_confluence`. Un vault puede fijar su propio sitio y sus variables en `integrations.confluence` (`docs/runbooks/promover-confluence.md`). |
+| `GIT_DEPLOY_KEY_B64` | Read-only deploy key registered in that organization's vault repo, in base64. Needed only with `VAULT_REMOTE`. |
+| `MCP_WEBHOOK_SECRET` | HMAC secret of that repo's `push` webhook. Without it, the webhook is rejected and a `W_WEBHOOK_SECRET_MISSING` warning is emitted. |
+| `MCP_API_KEY` | The server's bearer. Without `MCP_ADMIN_KEY` it has the `read` and `admin` scopes; with it, only `read`. With neither of the two (nor `bearers`), `E_HTTP_API_KEY_MISSING`. |
+| `MCP_ADMIN_KEY` | Optional. Bearer with the `admin` scope, the only one that can call `reindex`, `sync_confluence` and `POST /webhook/reindex` with a manual bearer. Different from `MCP_API_KEY`: if they coincide, `E_MANIFEST_INVALID`. |
+| `OPENAI_API_KEY` | Embeddings with the `openai` provider. Without it, `E_EMBEDDINGS_KEY_MISSING`. |
+| `<SLUG>_TYPESAFE_API_KEY` | Optional. Key of the `search` judge (rerank), with the name declared by the vault's `vault.yaml` `rerank.key_env` (`ACME_TYPESAFE_API_KEY` for the slug `acme`); `TYPESAFE_API_KEY` is valid only for the default vault. If the platform stores the key under a short name, the compose copies it to the vault's name. Without a value, `W_RERANK_KEY_MISSING` and that vault searches without a judge. |
+| `CONFLUENCE_URL`, `CONFLUENCE_EMAIL`, `CONFLUENCE_TOKEN` | Only with the `confluence` extension. `CONFLUENCE_URL` is the site root (`https://<org>.atlassian.net`), **without** `/wiki`: the client appends `/wiki/api/v2` on its own, and with a trailing `/wiki` every page responds 404 and ends up in `errors` of `sync_confluence`. A vault can set its own site and variables in `integrations.confluence` ([`docs/runbooks/promote-confluence.md`](promote-confluence.md)). |
 
-El webhook se configura en el repo vault con la URL `http://<host>:<puerto>/webhook/reindex?target=vault`. Con secreto, GitHub firma cada entrega en `X-Hub-Signature-256` (`sha256=`) y en `X-Hub-Signature` (`sha1=`); el servidor prueba primero la primera y acepta solo `sha256`, también bajo `X-Hub-Signature`, que es donde la manda Bitbucket. La ruta existe solo cuando el vault por defecto declara un repositorio (`repo` en `vaults.yaml` o `VAULT_REMOTE`): sin repositorio no hay nada que actualizar con git y el servidor responde 404 en esa ruta; el índice se reconstruye con la tool `reindex`.
+The webhook is configured in the vault repo with the URL `http://<host>:<port>/webhook/reindex?target=vault`. With a secret, GitHub signs each delivery in `X-Hub-Signature-256` (`sha256=`) and in `X-Hub-Signature` (`sha1=`); the server tries the first one first and accepts only `sha256`, also under `X-Hub-Signature`, which is where Bitbucket sends it. The route exists only when the default vault declares a repository (`repo` in `vaults.yaml` or `VAULT_REMOTE`): without a repository there is nothing to update with git and the server responds 404 on that route; the index is rebuilt with the `reindex` tool.
 
-El clon de un vault sigue solo su rama servida (`git.branch` en `vaults.yaml`; `VAULT_BRANCH` con `VAULT_PATH`; `main` por omisión). Una entrega firmada cuyo `ref` es otra rama o un tag, o que borra el ref (`deleted: true`, o un `after` de ceros), recibe 200 y no corre nada. Un `repo:push` de Bitbucket Cloud no trae `ref` de primer nivel: lista cada referencia que el push actualizó en `push.changes`, con su estado antes (`old`) y después (`new`, `null` si el push la borró), y la entrega corre solo si algún cambio tiene `new` de tipo `branch` con el nombre de la rama servida; si no, recibe la misma respuesta:
+A vault's clone follows only its served branch (`git.branch` in `vaults.yaml`; `VAULT_BRANCH` with `VAULT_PATH`; `main` by default). A signed delivery whose `ref` is another branch or a tag, or that deletes the ref (`deleted: true`, or an all-zeros `after`), receives 200 and runs nothing. A Bitbucket Cloud `repo:push` carries no top-level `ref`: it lists each reference the push updated in `push.changes`, with its state before (`old`) and after (`new`, `null` if the push deleted it), and the delivery runs only if some change has `new` of type `branch` with the served branch's name; otherwise it receives the same response:
 
 ```json
 {"status": "ignored", "mode": "signature", "reason": "not_served_branch", "ref": "refs/heads/fix/typo", "branch": "main", "target": "vault"}
 ```
 
-`reason` vale `not_served_branch` o `ref_deleted`. Un merge con `--delete-branch` (GitHub) o con «Close source branch» (Bitbucket) manda dos entregas casi juntas: la de la rama servida da 202 y la del borrado, `ignored`. En un `repo:push` de Bitbucket, `ref` es la referencia del primer cambio como ref de git (`refs/heads/<rama>`, `refs/tags/<tag>`), y `ref_deleted` con `refs/heads/<rama servida>` cuando un cambio borró la rama servida. Se juzgan dos formas: un payload con `ref` de primer nivel (GitHub, Gitea, Forgejo) y uno con `push.changes` (Bitbucket Cloud); un `ping`, un cuerpo que no es JSON, cualquier otra forma, una lista `push.changes` vacía o un cambio que no se puede leer siguen disparando el pull. Un bearer manual con alcance `admin` siempre encola el reindex, traiga el cuerpo que traiga. Los runs de un vault nunca se solapan: una entrega que llega mientras corre uno suma una sola pasada al terminar (que trae lo último del remoto), y la tool `reindex` espera el mismo candado. En el historial de entregas, un 200 es una entrega ignorada a propósito y un 202, una encolada.
+`reason` is `not_served_branch` or `ref_deleted`. A merge with `--delete-branch` (GitHub) or with "Close source branch" (Bitbucket) sends two deliveries almost together: the served branch's gets 202 and the deletion's is `ignored`. In a Bitbucket `repo:push`, `ref` is the first change's reference as a git ref (`refs/heads/<branch>`, `refs/tags/<tag>`), and `ref_deleted` with `refs/heads/<served branch>` when a change deleted the served branch. Two shapes are judged: a payload with a top-level `ref` (GitHub, Gitea, Forgejo) and one with `push.changes` (Bitbucket Cloud); a `ping`, a body that is not JSON, any other shape, an empty `push.changes` list or a change that cannot be read still trigger the pull. A manual bearer with the `admin` scope always enqueues the reindex, whatever body it brings. A vault's runs never overlap: a delivery that arrives while one is running adds a single pass at the end (which fetches the latest from the remote), and the `reindex` tool waits on the same lock. In the delivery history, a 200 is a delivery deliberately ignored and a 202 is one that was enqueued.
 
-Cada pasada lleva el clon a la punta de `origin/<rama servida>`, también cuando la rama se reescribió (force push) o el clon divergió: `git fetch --prune origin`, luego `git merge --ff-only` si `HEAD` es ancestro de la punta remota y, si no, `git checkout -f -B <rama> origin/<rama>`, el mismo comando con el que el bootstrap adopta un clon existente (sin `git clean`: los archivos sin seguimiento se quedan). La realineación deja un `WARNING` con el commit viejo y el nuevo, y después corre el reindex. Si el `fetch` falla, el clon no se toca y el log lleva un `ERROR`. `/health` lo muestra sin leer logs:
+Each pass brings the clone to the tip of `origin/<served branch>`, also when the branch was rewritten (force push) or the clone diverged: `git fetch --prune origin`, then `git merge --ff-only` if `HEAD` is an ancestor of the remote tip and, if not, `git checkout -f -B <branch> origin/<branch>`, the same command with which the bootstrap adopts an existing clone (no `git clean`: untracked files stay). The realignment leaves a `WARNING` with the old and new commit, and then runs the reindex. If the `fetch` fails, the clone is not touched and the log carries an `ERROR`. `/health` shows it without reading logs:
 
-| Clave | Valor |
+| Key | Value |
 |---|---|
-| `vault_commit` | Commit abreviado que tiene el clon ahora (`null` sin repositorio). |
-| `last_sync_at` | Fin de la última actualización en este proceso, ISO 8601 en UTC. |
-| `last_sync_result` | `fast_forward`, `up_to_date`, `realigned` o `failed`. |
-| `last_sync_error` | Motivo de un `failed`, en una línea y sin credenciales; `null` en los demás casos. |
-| `last_change_at` | Fin de la última actualización que movió el clon en este proceso, ISO 8601 en UTC. |
-| `last_change_result` | `fast_forward` o `realigned`. Un `up_to_date` o un `failed` posterior no lo reemplaza. |
+| `vault_commit` | Abbreviated commit the clone holds now (`null` without a repository). |
+| `last_sync_at` | End of the last update in this process, ISO 8601 in UTC. |
+| `last_sync_result` | `fast_forward`, `up_to_date`, `realigned` or `failed`. |
+| `last_sync_error` | Reason for a `failed`, on one line and without credentials; `null` otherwise. |
+| `last_change_at` | End of the last update that moved the clone in this process, ISO 8601 in UTC. |
+| `last_change_result` | `fast_forward` or `realigned`. A later `up_to_date` or `failed` does not replace it. |
 
-Las tres `last_sync_*` valen `null` hasta la primera actualización tras un arranque (el bootstrap ya trajo el clon) y en un vault sin repositorio; las dos `last_change_*`, hasta la primera actualización que mueve el clon. Las `last_sync_*` describen el último intento y las `last_change_*`, el último cambio: dos merges seguidos dejan una pasada de más que ya no trae nada (`last_sync_result: up_to_date`), y `last_change_result` sigue diciendo cómo llegó el merge. Un `failed` no cambia `status`. Si `last_sync_result` se queda en `failed` entrega tras entrega, el clon está sirviendo el commit de `vault_commit`: revisa la deploy key y el remoto.
+The three `last_sync_*` are `null` until the first update after a startup (the bootstrap already brought the clone) and in a vault without a repository; the two `last_change_*`, until the first update that moves the clone. The `last_sync_*` keys describe the last attempt and the `last_change_*` keys the last change: two merges in a row leave one extra pass that no longer brings anything (`last_sync_result: up_to_date`), and `last_change_result` still says how the merge arrived. A `failed` does not change `status`. If `last_sync_result` stays at `failed` delivery after delivery, the clone is serving the commit in `vault_commit`: check the deploy key and the remote.
 
-### Alcances por bearer
+### Scopes per bearer
 
-Cada bearer HTTP es un principal con alcances: `read` usa el servidor y `admin` además llama las tools de administración (`reindex`, que cambia el índice, y `sync_confluence`, que solo lee) y `POST /webhook/reindex` con bearer manual. Ninguna escribe en el vault. Un bearer sin `admin` recibe `isError` con `E_SCOPE_REQUIRED` en esas tools y 403 en el webhook; el resto de las tools no cambia.
+Each HTTP bearer is a principal with scopes: `read` uses the server and `admin` also calls the administration tools (`reindex`, which changes the index, and `sync_confluence`, which only reads) and `POST /webhook/reindex` with a manual bearer. None of them writes to the vault. A bearer without `admin` receives `isError` with `E_SCOPE_REQUIRED` on those tools and 403 on the webhook; the rest of the tools do not change.
 
-| Configuración | Principales |
+| Configuration | Principals |
 |---|---|
-| Solo `MCP_API_KEY` | `service`, con `read` y `admin`: igual que en 1.2.0 |
-| `MCP_ADMIN_KEY` (y opcionalmente `MCP_API_KEY`) | `admin` (`MCP_ADMIN_KEY`), con `read` y `admin`; `service-read` (`MCP_API_KEY`), solo `read` |
-| `bearers` en `vaults.yaml` | Uno por entrada, y ningún otro: `MCP_API_KEY` y `MCP_ADMIN_KEY` se ignoran |
+| `MCP_API_KEY` only | `service`, with `read` and `admin`: same as in 1.2.0 |
+| `MCP_ADMIN_KEY` (and optionally `MCP_API_KEY`) | `admin` (`MCP_ADMIN_KEY`), with `read` and `admin`; `service-read` (`MCP_API_KEY`), `read` only |
+| `bearers` in `vaults.yaml` | One per entry, and no other: `MCP_API_KEY` and `MCP_ADMIN_KEY` are ignored |
 
-`bearers` vive solo en `vaults.yaml` (un despliegue `VAULT_PATH` no lo lee) y nombra la variable de cada token, nunca el token:
+`bearers` lives only in `vaults.yaml` (a `VAULT_PATH` deployment does not read it) and names each token's variable, never the token:
 
 ```yaml
 bearers:
-  - id: ana            # ^[a-z0-9][a-z0-9-]{0,31}$, único; es lo que sale en el log
+  - id: ana            # ^[a-z0-9][a-z0-9-]{0,31}$, unique; it is what appears in the log
     token_env: KNOWLEDGE_TOKEN_ANA
-    scopes: [read]     # read por omisión; admin exige read
+    scopes: [read]     # read by default; admin requires read
   - id: ops
     token_env: KNOWLEDGE_TOKEN_OPS
     scopes: [read, admin]
 ```
 
-Por HTTP, una entrada cuya variable está vacía detiene el arranque con `E_SECRET_MISSING`, y dos entradas con el mismo token con `E_MANIFEST_INVALID`. Por stdio no hay bearers: se ignoran con `W_BEARERS_IGNORED_STDIO`. `cloudfrog-knowledge doctor` muestra el bloque `auth` (ids, alcances, nombres de variables y si están definidas, nunca un valor).
+Over HTTP, an entry whose variable is empty stops startup with `E_SECRET_MISSING`, and two entries with the same token stop it with `E_MANIFEST_INVALID`. Over stdio there are no bearers: they are ignored with `W_BEARERS_IGNORED_STDIO`. `cloudfrog-knowledge doctor` shows the `auth` block (ids, scopes, variable names and whether they are defined, never a value).
 
-## 6. Gate de umbrales antes del corte
+## 6. Threshold gate before the cutover
 
-La imagen no trae `config.json`. Los umbrales de `get_stale_docs` (`review.thresholds_days`) salen, en este orden, de `vault.yaml` en la raíz del vault, de un archivo apuntado por `KNOWLEDGE_CONFIG_JSON` o de los valores internos, con `W_REVIEW_THRESHOLDS_FALLBACK` en el log de arranque.
+The image ships no `config.json`. The `get_stale_docs` thresholds (`review.thresholds_days`) come, in this order, from `vault.yaml` at the vault root, from a file pointed to by `KNOWLEDGE_CONFIG_JSON`, or from the built-in values, with `W_REVIEW_THRESHOLDS_FALLBACK` in the startup log.
 
-**No cortes una instancia a su repo vault hasta que ese repo tenga `vault.yaml` con `review.thresholds_days`** (o hasta que montes un `config.json` y lo apuntes con `KNOWLEDGE_CONFIG_JSON`). Si no, `get_stale_docs` cambia de resultados sin que nada falle. Un vault que declara sus umbrales en `vault.yaml` no necesita que el compose defina `KNOWLEDGE_CONFIG_JSON`.
+**Do not cut an instance over to its vault repo until that repo has a `vault.yaml` with `review.thresholds_days`** (or until you mount a `config.json` and point to it with `KNOWLEDGE_CONFIG_JSON`). Otherwise `get_stale_docs` changes its results without anything failing. A vault that declares its thresholds in `vault.yaml` does not need the compose to define `KNOWLEDGE_CONFIG_JSON`.
 
-## 7. Corte de una instancia a su repo vault
+## 7. Cutting an instance over to its vault repo
 
-Este es el procedimiento común; el dominio, la aplicación en la plataforma, las claves por nombre y el rollback de cada despliegue están en su vault, en `Deploy/`.
+This is the common procedure; the domain, the application on the platform, the keys by name and the rollback of each deployment are in its vault, under `Deploy/`.
 
-El orden importa. Si el compose nuevo se despliega con la deploy key vieja, el bootstrap falla en el `git clone` bajo `set -eu` y el contenedor queda en un bucle de reinicios; si se cambia la llave antes que el compose, falla igual el `fetch` del remoto viejo en el siguiente reinicio.
+Order matters. If the new compose is deployed with the old deploy key, the bootstrap fails at `git clone` under `set -eu` and the container ends up in a restart loop; if the key is changed before the compose, the `fetch` from the old remote fails just the same on the next restart.
 
-1. Antes: anota `curl -s https://<dominio>/health` y guarda `indexed`.
-2. Registra una deploy key de solo lectura en el repo vault: `gh repo deploy-key list -R <org>/<vault>` la muestra con `read-only`.
-3. Apaga el despliegue automático del compose en la plataforma, si lo tiene.
-4. Mergea el cambio del compose a `main` (sin despliegue, porque el automático está apagado).
-5. En el entorno del compose: `GIT_DEPLOY_KEY_B64` con la llave nueva, `MCP_ADMIN_KEY` (distinta de `MCP_API_KEY`) y `MCP_WEBHOOK_SECRET` (nuevo; es el secreto del webhook del repo vault). El resto queda igual.
-6. Despliega y espera `/health` con `status: ok` y el `contract_version` publicado.
-7. Crea el webhook `push` en el repo vault (`https://<dominio>/webhook/reindex?target=vault`, `application/json`, secreto = `MCP_WEBHOOK_SECRET`) y dispara el primer reindex con una entrega de prueba o un push. La entrega va firmada por HMAC y no lleva ningún bearer `admin`. Con `openai`, el primer reindex embebe el vault completo.
-8. Después: el historial de entregas del webhook trae `202`, y `/health` devuelve `index_version: 1`, `vector_backend: sqlite-vec`, un `indexed` mayor que cero, un `last_indexed_at` nuevo, el `vault_commit` de la punta de la rama servida y `last_sync_result` distinto de `failed`. El número de `indexed` cuenta chunks.
-9. Vuelve a encender el despliegue automático.
+1. Before: note down `curl -s https://<domain>/health` and save `indexed`.
+2. Register a read-only deploy key on the vault repo: `gh repo deploy-key list -R <org>/<vault>` shows it with `read-only`.
+3. Turn off the platform's automatic deployment of the compose, if it has one.
+4. Merge the compose change to `main` (no deployment, because the automatic one is off).
+5. In the compose's environment: `GIT_DEPLOY_KEY_B64` with the new key, `MCP_ADMIN_KEY` (different from `MCP_API_KEY`) and `MCP_WEBHOOK_SECRET` (new; it is the vault repo's webhook secret). The rest stays the same.
+6. Deploy and wait for `/health` with `status: ok` and the published `contract_version`.
+7. Create the `push` webhook on the vault repo (`https://<domain>/webhook/reindex?target=vault`, `application/json`, secret = `MCP_WEBHOOK_SECRET`) and trigger the first reindex with a test delivery or a push. The delivery is HMAC-signed and carries no `admin` bearer. With `openai`, the first reindex embeds the whole vault.
+8. Afterwards: the webhook's delivery history shows `202`, and `/health` returns `index_version: 1`, `vector_backend: sqlite-vec`, an `indexed` greater than zero, a new `last_indexed_at`, the `vault_commit` of the served branch's tip and a `last_sync_result` other than `failed`. The `indexed` number counts chunks.
+9. Turn the automatic deployment back on.
 
-Rollback: devuelve el entorno anterior del compose, revierte el cambio del compose por PR y despliega. Antes de cambiar nada, respalda el volumen del contenedor (`docker run --rm -v <volumen>:/v -v "$PWD":/b alpine tar czf /b/vol.tgz -C /v .`): el compose nuevo reemplaza el índice viejo por el contenido del repo vault. El bootstrap hace `checkout -f` de `VAULT_BRANCH` sobre un clon que ya exista, así que un rollback al compose viejo solo arranca si esa rama conserva lo que el compose viejo espera.
+Rollback: restore the compose's previous environment, revert the compose change through a PR and deploy. Before changing anything, back up the container's volume (`docker run --rm -v <volume>:/v -v "$PWD":/b alpine tar czf /b/vol.tgz -C /v .`): the new compose replaces the old index with the vault repo's content. The bootstrap does a `checkout -f` of `VAULT_BRANCH` on a clone that already exists, so a rollback to the old compose starts only if that branch keeps what the old compose expects.
 
-#### Leer las llamadas por tool
+#### Reading per-tool calls
 
-El servidor cuenta cada llamada por tool, cliente y principal en el `usage_stats.json` del índice (`/data/index/<slug>`, volumen `knowledge-index`); el formato está en el README, sección «Telemetría de llamadas». Para leerlo, abre la terminal del servicio `knowledge-mcp` en tu plataforma (o `docker exec -it <contenedor> sh` en el host) y corre `doctor`, que solo lee:
+The server counts each call by tool, client and principal in the index's `usage_stats.json` (`/data/index/<slug>`, `knowledge-index` volume); the format is in the README, section "Call telemetry" ([`README.md`](../../README.md)). To read it, open the `knowledge-mcp` service's terminal on your platform (or `docker exec -it <container> sh` on the host) and run `doctor`, which only reads:
 
 ```bash
 python -m knowledge doctor | python3 -c 'import json,sys; v=[r for r in json.load(sys.stdin)["vaults"] if r["default"]][0]; print(json.dumps(v["tool_calls"], indent=1))'
 ```
 
-El contenedor ya trae `VAULT_PATH` y `KNOWLEDGE_INDEX_DIR`, así que `doctor` lee el archivo del despliegue. `last_7_days.by_client` dice qué clientes llaman, con el nombre que cada uno declara en su `initialize` (un cliente nuevo aparece aquí con su propio nombre), `by_principal` con qué bearer (`service-read` es `MCP_API_KEY`, `admin` es `MCP_ADMIN_KEY`), `deprecated` cuántas llamadas recibió `search_code` y `unregistered` cuántas fueron a un nombre que el contrato no define. Ninguna clave trae argumentos ni el bearer. Un redespliegue no borra el archivo (vive en el volumen), pero sí los conteos que el proceso todavía no había escrito si el contenedor muere sin cerrar.
+The container already carries `VAULT_PATH` and `KNOWLEDGE_INDEX_DIR`, so `doctor` reads the deployment's file. `last_7_days.by_client` says which clients call, under the name each one declares in its `initialize` (a new client shows up here under its own name), `by_principal` with which bearer (`service-read` is `MCP_API_KEY`, `admin` is `MCP_ADMIN_KEY`), `deprecated` how many calls `search_code` received and `unregistered` how many went to a name the contract does not define. No key carries arguments or the bearer. A redeploy does not delete the file (it lives on the volume), but it does lose the counts the process had not yet written if the container dies without shutting down cleanly.
 
-Un proceso que corre una versión sin esta telemetría reescribe el archivo sin la sección `tool_calls`: para volver atrás sin perderla, revierte a un commit que la incluya.
+A process running a version without this telemetry rewrites the file without the `tool_calls` section: to roll back without losing it, revert to a commit that includes it.
 
-#### Desplegar una imagen en un destino cuyo compose no está aquí
+#### Deploying an image to a target whose compose is not here
 
-Antes de desplegar una imagen de este paquete en un destino con su propio compose, revisa qué monta su contenedor: `docker inspect <contenedor> --format '{{json .Mounts}}'`. Si `/data/chroma` es un volumen y su compose no fija `KNOWLEDGE_INDEX_DIR`, el índice se escribe en `/data/chroma/index.sqlite`, dentro de ese volumen. Si `/data/chroma` no es un volumen, el índice se pierde en cada despliegue y el vault se re-embebe en cada arranque: monta un volumen ahí, o fija `KNOWLEDGE_INDEX_DIR` sobre uno, y recién entonces despliega.
+Before deploying an image of this package to a target with its own compose, check what its container mounts: `docker inspect <container> --format '{{json .Mounts}}'`. If `/data/chroma` is a volume and its compose does not set `KNOWLEDGE_INDEX_DIR`, the index is written to `/data/chroma/index.sqlite`, inside that volume. If `/data/chroma` is not a volume, the index is lost on every deployment and the vault is re-embedded on every startup: mount a volume there, or set `KNOWLEDGE_INDEX_DIR` on one, and only then deploy.
 
-#### Vault que llega como volumen
+#### Vault delivered as a volume
 
-Cuando quien posee el contenido publica el vault en un volumen y el contenedor no debe correr git, el vault se monta de solo lectura y `90 - Memory`, la única carpeta donde el servidor escribe, va en un volumen aparte. Es un override de `infra/compose.yml`:
+When whoever owns the content publishes the vault on a volume and the container must not run git, the vault is mounted read-only and `90 - Memory`, the only folder where the server writes, goes on a separate volume. It is an override of `infra/compose.yml`:
 
 ```yaml
 services:
@@ -170,111 +170,111 @@ volumes:
   memory-export:
 ```
 
-Precondición: el volumen `vault-data` ya contiene la carpeta `90 - Memory`. El runtime no puede crear un punto de montaje dentro de un montaje de solo lectura, y sin ella `up` falla con «read-only file system» aunque `docker compose config` acepte el archivo. Sin `VAULT_REMOTE` git no corre y no hace falta ninguna deploy key. `sync_confluence` solo informa y `cloudfrog-knowledge confluence export` escribe fuera de todo vault (ADR-044), así que nada más necesita el vault escribible.
+Precondition: the `vault-data` volume already contains the `90 - Memory` folder. The runtime cannot create a mount point inside a read-only mount, and without it `up` fails with "read-only file system" even though `docker compose config` accepts the file. Without `VAULT_REMOTE` git does not run and no deploy key is needed. `sync_confluence` only reports and `cloudfrog-knowledge confluence export` writes outside every vault (ADR-044), so nothing else needs the vault to be writable.
 
-### Compose genérico (`infra/compose.yml`)
+### Generic Compose file (`infra/compose.yml`)
 
-Es el compose sin organización: el mismo archivo sirve N instancias, y lo que las distingue es solo su entorno. No trae URLs de vaults, dominios ni slugs; no publica puertos (una plataforma enruta al puerto 8000 del contenedor, y quien usa `docker compose` a mano añade `ports:` en un override). `memory-cloud` y su `postgres` viven bajo el perfil `memory`: sin `--profile memory` (o `COMPOSE_PROFILES=memory`) corre solo el servidor de conocimiento. `MEMORY_CLOUD_IDENTITY_MODE` llega a `memory-cloud` con `grace` por omisión (acepta el `MEMORY_CLOUD_TOKEN` compartido junto a los tokens personales); con `required`, memory 1.7.0 o posterior responde `401 identity_required` a ese token en `/sync/*` y deja el dashboard solo a administradores. Cada instancia lo cambia en su entorno y con un nuevo despliegue.
+This is the organization-agnostic compose: the same file serves N instances, and what tells them apart is only their environment. It carries no vault URLs, domains or slugs; it publishes no ports (a platform routes to the container's port 8000, and whoever uses `docker compose` by hand adds `ports:` in an override). `memory-cloud` and its `postgres` live under the `memory` profile: without `--profile memory` (or `COMPOSE_PROFILES=memory`) only the knowledge server runs. `MEMORY_CLOUD_IDENTITY_MODE` reaches `memory-cloud` with `grace` by default (it accepts the shared `MEMORY_CLOUD_TOKEN` alongside personal tokens); with `required`, memory 1.7.0 or later responds `401 identity_required` to that token on `/sync/*` and leaves the dashboard to administrators only. Each instance changes it in its environment and with a new deployment.
 
-Los vaults entran por el entorno. `KNOWLEDGE_VAULTS_YAML` lleva el contenido de un `vaults.yaml` (multilínea) y cada entrada es de uno de dos tipos:
+Vaults come in through the environment. `KNOWLEDGE_VAULTS_YAML` carries the contents of a `vaults.yaml` (multiline) and each entry is of one of two kinds:
 
-| Entrada | Qué hace el entrypoint |
+| Entry | What the entrypoint does |
 |---|---|
-| `repo` (y `git.branch`, `main` por omisión) | Clona o actualiza el vault en `/data/vaults/<slug>` (o en su `path`, si lo trae). Corre en cada arranque y el servidor lo actualiza después con `reindex(pull=true)`. |
-| solo `path` | Usa la carpeta montada tal cual; git no corre. Monta la carpeta en el contenedor (`/data/local` es un volumen vacío para eso; `KNOWLEDGE_LOCAL_DIR` puede nombrar un directorio del host). |
+| `repo` (and `git.branch`, `main` by default) | Clones or updates the vault at `/data/vaults/<slug>` (or at its `path`, if it carries one). It runs on every startup and the server updates it afterwards with `reindex(pull=true)`. |
+| `path` only | Uses the mounted folder as is; git does not run. Mount the folder in the container (`/data/local` is an empty volume for that; `KNOWLEDGE_LOCAL_DIR` can name a host directory). |
 
-`infra/resolve-vaults.py` (`knowledge-resolve-vaults` en la imagen) valida el slug y el origen de cada entrada, escribe `/data/vaults.resolved.yaml` con todos los `path` absolutos y deja el resto de las claves intactas: el servidor lo valida al arrancar, con sus propios códigos. Después el entrypoint exporta `KNOWLEDGE_VAULTS` apuntando a ese archivo y descarta `VAULT_PATH` y `VAULT_REMOTE`, que la imagen fija por omisión y que de otro modo se avisarían como ignoradas.
+`infra/resolve-vaults.py` (`knowledge-resolve-vaults` in the image) validates each entry's slug and origin, writes `/data/vaults.resolved.yaml` with all `path` values made absolute and leaves the other keys intact: the server validates it at startup, with its own codes. Then the entrypoint exports `KNOWLEDGE_VAULTS` pointing at that file and discards `VAULT_PATH` and `VAULT_REMOTE`, which the image sets by default and which would otherwise be reported as ignored.
 
-Deploy key de un vault por ssh (base64 de la llave privada), en este orden: la variable que nombre `deploy_key_env` de la entrada, `<SLUG_EN_MAYÚSCULAS>_GIT_DEPLOY_KEY_B64` (`team-docs` → `TEAM_DOCS_GIT_DEPLOY_KEY_B64`) y `GIT_DEPLOY_KEY_B64`. Un remoto `file://`, `http(s)://` o una ruta local no necesita llave. Cada vault escribe la suya en `~/.ssh/knowledge_<slug>` (0600) y su clon la recuerda en `core.sshCommand`, así el `git pull` del servidor lee con la misma llave. El compose solo lista `GIT_DEPLOY_KEY_B64`: las llaves por vault van en el archivo opcional que nombra `KNOWLEDGE_ENV_FILE` (`infra/.env.vault-keys` por omisión, ignorado por git) o en el `environment` de un override.
+A vault's deploy key over ssh (base64 of the private key), in this order: the variable named by the entry's `deploy_key_env`, `<SLUG_IN_UPPERCASE>_GIT_DEPLOY_KEY_B64` (`team-docs` → `TEAM_DOCS_GIT_DEPLOY_KEY_B64`) and `GIT_DEPLOY_KEY_B64`. A `file://`, `http(s)://` or local-path remote needs no key. Each vault writes its own to `~/.ssh/knowledge_<slug>` (0600) and its clone remembers it in `core.sshCommand`, so the server's `git pull` reads with the same key. The compose lists only `GIT_DEPLOY_KEY_B64`: per-vault keys go in the optional file named by `KNOWLEDGE_ENV_FILE` (`infra/.env.vault-keys` by default, ignored by git) or in an override's `environment`.
 
-- Sin `KNOWLEDGE_VAULTS_YAML` el entrypoint es el de siempre: `VAULT_PATH`, `VAULT_REMOTE`, `VAULT_BRANCH` y `GIT_DEPLOY_KEY_B64`, un solo vault.
-- Si un clon existente no se puede actualizar (el remoto no responde), el arranque avisa con `W_VAULT_REFRESH_FAILED` y sirve lo que hay en disco; un clon que no se puede crear sale con `E_VAULT_CLONE_FAILED` y no sirve nada. Una llave ausente para un remoto ssh sale con `E_DEPLOY_KEY_MISSING` (código 64), antes de llamar a git.
-- `/webhook/reindex` y `/health` sirven solo el vault por defecto. Los demás vaults con `repo` se actualizan al reiniciar o con `reindex(vault=<slug>, pull=true)` (bearer `admin`).
+- Without `KNOWLEDGE_VAULTS_YAML` the entrypoint is the usual one: `VAULT_PATH`, `VAULT_REMOTE`, `VAULT_BRANCH` and `GIT_DEPLOY_KEY_B64`, a single vault.
+- If an existing clone cannot be updated (the remote does not respond), startup warns with `W_VAULT_REFRESH_FAILED` and serves what is on disk; a clone that cannot be created exits with `E_VAULT_CLONE_FAILED` and serves nothing. A missing key for an ssh remote exits with `E_DEPLOY_KEY_MISSING` (code 64), before calling git.
+- `/webhook/reindex` and `/health` serve only the default vault. The other vaults with `repo` are updated on restart or with `reindex(vault=<slug>, pull=true)` (`admin` bearer).
 
-`lab/` prueba todo esto con tenants falsos: dos instancias de este compose, tres vaults (dos por `file://`, una carpeta), bearers aparte y una tabla PASS/FAIL (`lab/run.sh`, ver `lab/README.md`).
+`lab/` tests all of this with fake tenants: two instances of this compose, three vaults (two over `file://`, one folder), separate bearers and a PASS/FAIL table (`lab/run.sh`, see [`lab/README.md`](../../lab/README.md)).
 
-## 8. Errores y qué hacer
+## 8. Errors and what to do
 
-| Código | Acción |
+| Code | Action |
 |---|---|
-| `E_VAULT_PATH_MISSING` | Define `VAULT_PATH` con un clon del repositorio del vault (o `vault_path` en `config.json`, o un `vaults.yaml`). Este repositorio no trae ningún vault. |
-| `E_VAULT_PATH_NOT_DIR` | La ruta no existe: monta el volumen ahí, o revisa que el clon de `VAULT_REMOTE` en `VAULT_BRANCH` la contenga. |
-| `E_DEPLOY_KEY_MISSING` | `VAULT_REMOTE` está definido y `GIT_DEPLOY_KEY_B64` vacío: cárgala, o vacía `VAULT_REMOTE`. |
-| `E_EMBEDDINGS_KEY_MISSING` | Define la variable que nombra `key_env` (por omisión `OPENAI_API_KEY`) o usa el proveedor `none`. |
-| `E_EMBEDDINGS_PROVIDER_UNKNOWN` | Usa `openai`, `none` o `bag-of-words`. |
-| `E_HTTP_API_KEY_MISSING` | Define `MCP_API_KEY` (o `MCP_ADMIN_KEY`, o `bearers` en `vaults.yaml`) para el transporte HTTP. |
-| `E_SCOPE_REQUIRED` | El bearer de la llamada no tiene el alcance `admin`: `reindex` y `sync_confluence` responden `isError` con este código, y `POST /webhook/reindex` con bearer manual, 403. Usa el bearer de `MCP_ADMIN_KEY` o una entrada de `bearers` con `scopes: [read, admin]`. |
-| `E_HTTP_PORT_INVALID` | `MCP_HTTP_PORT` debe ser un entero válido. |
-| `E_CONFIG_JSON_INVALID` | El `config.json` existe pero no se lee o no es un objeto JSON: corrígelo o quítalo. |
-| `E_INDEX_PROVIDER_MISMATCH` | Aviso en el log: el índice se construyó con otro proveedor, modelo o plan de chunks, y el servidor lo vacía y re-embebe el vault completo antes de responder (con `openai`, el costo de un reindex completo). |
-| `E_INDEX_VERSION_NEWER` | El `index.sqlite` lo escribió un paquete más nuevo que el instalado: actualiza `cloudfrog-knowledge` o apunta el vault a otro directorio de índice. `migrate-index` sale con código 2. |
-| `E_INDEX_UNREADABLE` | El `index.sqlite` no es una base SQLite o SQLite no lo puede leer (archivo truncado o ajeno). `migrate-index` sale con código 2 y el arranque se detiene: mueve el archivo a otro lado y el índice se reconstruye vacío en la siguiente corrida. Un `link_graph.json` ilegible en el directorio de Chroma no detiene nada: se omiten los pesos aprendidos con un aviso en el log. |
-| `E_SQLITE_VEC_UNAVAILABLE` | `KNOWLEDGE_REQUIRE_SQLITE_VEC=1` y la extensión `sqlite-vec` no carga en este Python: usa un Python con extensiones cargables (`uvx --managed-python`, el de la imagen) o quita la variable para aceptar el respaldo `python`, más lento. `doctor` y `/health` dicen qué `vector_backend` sirve. |
-| `E_PRUNE_REFUSED` | `migrate-index --prune-chroma` no borra nada en un directorio que es o contiene un vault registrado: revisa `--from-chroma`. |
-| `E_VAULTS_FILE_MISSING` | `KNOWLEDGE_VAULTS` apunta a un archivo que no existe. |
-| `E_MANIFEST_INVALID` | El mensaje trae la ruta de la clave: corrige esa clave del `vaults.yaml` o del `vault.yaml`. En `integrations.<confluence|jira>`, `site` debe ser `https` en `*.atlassian.net` o en un host de `KNOWLEDGE_INTEGRATION_SITES` (`http` solo en loopback) y `secrets.email_env` y `secrets.token_env` deben nombrar una variable de esa integración con el prefijo del vault (`ACME_JIRA_EMAIL` para `acme`; sin prefijo, como `CONFLUENCE_TOKEN`, solo el vault por defecto), nunca un secreto del servidor ni la variable de otro vault. También sale cuando `MCP_ADMIN_KEY` es igual a `MCP_API_KEY` o dos entradas de `bearers` resuelven al mismo token: genera uno distinto con `openssl rand -hex 32`. |
-| `E_SECRET_IN_MANIFEST` | Hay algo con forma de credencial en el archivo: bórralo, rótalo y referencia una variable de entorno. |
-| `E_VAULT_SLUG_INVALID` | El slug no cumple el patrón de la sección 3. |
-| `E_VAULT_SLUG_DUPLICATE` | Dos entradas con el mismo slug. |
-| `E_VAULT_SLUG_MISMATCH` | El `vault.yaml` declara un slug distinto al del registro: haz que coincidan. |
-| `E_VAULT_DEFAULT_AMBIGUOUS` | Más de una entrada con `default: true`. |
-| `E_VAULT_DEFAULT_MISSING` | Hay varios vaults y ninguno es `default: true`. |
-| `E_VAULT_MANIFEST_MISSING` | El registro exige `vault.yaml` en el vault y no está. |
-| `E_VAULT_UNKNOWN` | El slug pedido no está registrado: al arrancar, o en el `vault=` de una llamada a una tool (el mensaje lista los slugs registrados). |
-| `E_EVAL_UNAVAILABLE` | `eval` necesita `scripts/`, que no viaja en la imagen ni en el paquete. |
-| `E_LINT_PATH_NOT_DIR` | `vault-lint` recibió una ruta que no es un directorio. |
-| `E_KNOWLEDGE_HOME_NOT_WRITABLE` | `doctor` encontró que el directorio de datos (`KNOWLEDGE_HOME` o `data_dir` del `vaults.yaml`) no se puede escribir: apúntalo a un directorio escribible. |
-| `E_FRONTMATTER_UNPARSEABLE` | Un frontmatter no es YAML válido: corrígelo en un PR del vault. |
-| `E_FRONTMATTER_NOT_MAPPING` | El frontmatter debe ser un mapa de clave y valor. |
-| `E_WIKILINK_UNRESOLVED` | Un wikilink no apunta a ningún archivo del vault. |
-| `E_LINT_RULES_UNKNOWN` | `vault-lint --rules` solo acepta `1.2` (las reglas que cuenta `reindex.validation`) y `1.3` (las de `1.2` más las del vault). |
-| `E_FRONTMATTER_LAST_UPDATED` | `vault-lint` (reglas 1.3): la nota no tiene `last_updated` o no es una fecha ISO, y `get_stale_docs` no puede medirle la edad. `vault-lint --fix` la toma de `updated`, `last_review` o `last_verified.date` si alguno es una fecha; el resto va a mano en un PR del vault. |
-| `E_SCOPE_FOREIGN` | `vault-lint` (reglas 1.3): el `scope` de la nota no es el `slug` del vault, `global` ni uno de los `scopes` que declara su `vault.yaml`; es una convención de otro vault. Muévela allí, o declara el alcance en `scopes:` si el vault lo usa a propósito. |
-| `E_PATH_CASE_COLLISION` | `vault-lint` (reglas 1.3): dos rutas, o un directorio, difieren solo por mayúsculas o por la forma Unicode del nombre, y chocan en un disco que no distingue mayúsculas o que normaliza. Renombra una. |
-| `E_PATH_NOT_NFC` | `vault-lint` (reglas 1.3): la ruta no está en la forma Unicode NFC. Renómbrala con la forma NFC del mismo nombre. |
-| `E_RUNBOOK_ID_INVALID` | `vault-lint` (reglas 1.3): un runbook (`type: runbook` bajo `runbooks.dir`, que no sea plantilla) sin `id` de la forma `RB-NNN`. El servidor de memory lo omite al reescanear. |
-| `E_RUNBOOK_STATUS_INVALID` | `vault-lint` (reglas 1.3): el `status` de un runbook no es `draft`, `verified` ni `outdated`. |
-| `E_RUNBOOK_SERVICE_UNKNOWN` | `vault-lint` (reglas 1.3): el `service` de un runbook no es un `slug` ni un alias de `Runbooks/services.json` (o del `runbooks.services_file` del manifiesto). |
-| `E_SERVICES_MAP_INVALID` | `vault-lint` (reglas 1.3): `services.json` no es `{"services": [{"slug", "aliases"}]}`, o no declara ningún servicio. Con el archivo roto no se comprueba el `service` de los runbooks. |
-| `E_PROFILE_UNKNOWN` | El perfil de tools pedido no existe. |
-| `E_OUTPUT_SETTING_INVALID` | `KNOWLEDGE_STRUCTURED_OUTPUT` acepta solo `0` (default: solo los bloques de texto) o `1` (catálogo con `outputSchema` y respuestas con `structuredContent`); `KNOWLEDGE_TEXT_INDENT` acepta un entero de 1 a 8 (sangría del texto de cada respuesta; sin definir, JSON compacto). |
-| `E_FIELD_UNKNOWN` | El `fields` de una llamada nombra una clave que la tool no tiene, o está vacío: el mensaje trae la lista permitida. |
-| `E_ARGUMENT_CONFLICT` | Dos argumentos se excluyen: en `get_document`, `chunk_id` con `section`, `start_line` o `end_line`, o un `chunk_id` de otro documento (el mensaje nombra cuál); en `search_by_metadata`, `fields` con `facets=True`. |
-| `E_ARGUMENT_OUT_OF_RANGE` | Un argumento está fuera de su rango: `limit` fuera de 1-50 en `search`, de 1-20 en `search_deep`, de 1-200 en `search_by_metadata`, `get_related` y `suggest_links` o de 1-500 en `get_stale_docs`, `offset` negativo en `search_by_metadata`, `max_items` fuera de 0-1000 en `get_impact`, `budget_tokens` fuera de [500, 12000] en `context_pack`, o `max_chars` menor que 1 en `get_document`. |
-| `E_ARGUMENT_RETIRED` | Un parámetro que el contrato retiró y que el esquema sigue declarando para avisar en lugar de ignorarlo: `include_metadata` de `get_document`, retirado en 2.0.0. Usa `full_metadata=true` para todo el frontmatter, o `fields` sin `metadata` para dejarlo fuera. |
-| `E_ARGUMENT_MISSING` | La llamada no nombra sobre qué actuar: `get_document` sin `file_path` ni `chunk_id`. Pasa el `chunk_id` de una fila de `search`. |
-| `E_FILE_NOT_FOUND` | `get_document` sobre una ruta que no es un archivo del vault: toma `file_path` de una fila de `search`, relativo al vault y sin corchetes de wikilink. |
-| `E_SECTION_NOT_FOUND` | `get_document(section=...)` con un heading que el documento no tiene: el mensaje lista hasta 20 de sus headings. |
-| `E_FILE_NOT_IN_GRAPH` | `find_path` con un extremo que no está en el grafo de enlaces: ningún wikilink lo alcanza y no enlaza a nada, o no es un documento del vault. Toma `file_path` de una fila de `search`. |
-| `E_FLOW_NOT_FOUND` | `get_flow` o `compare_flows` con un proveedor para el que el vault no tiene documento de flujo (una nota `Flow - <proveedor>.md`); `compare_flows` nombra todos los que faltan. `search(query='flow')` lista los que hay. |
-| `E_SCOPE_EMPTY` | `sync_confluence` con un `scope_prefix` en el que ningún archivo tiene `confluence_id`: el alcance está mal o falta mapear las páginas. El mensaje nombra hasta 20 archivos con `confluence_id` fuera del alcance; pasa el `scope_prefix` que los contiene. |
-| `E_RERANK_NOT_CONFIGURED` | `search(rerank="on")` sobre un vault cuyo `vault.yaml` no declara `rerank.provider`: el llamador pidió un juez que el vault no tiene. Omite `rerank` o pide al dueño del vault que declare el bloque `rerank` por PR; la clave nunca se declara, solo el nombre de su variable. |
-| `E_EXPORT_FAILED` | `confluence export` no pudo leer el vault o preparar `--out` fuera de una página concreta: revisa permisos de las dos rutas. Una página que falla sola va en `errors` del JSON y el código es 1. |
-| `E_WRITE_FENCED` | Una escritura caería dentro de un vault: `sync_confluence(dry_run=False)` siempre, `confluence export` con un `--out` (o un symlink) dentro de un vault servido, o `vault-lint --fix` sobre un vault servido (o con su `--out` dentro de uno): corre `--fix` en un checkout que no se sirve o con `--out DIR` fuera de todo vault. Usa `dry_run=True` para el reporte y `confluence export --out <dir fuera del vault>` para los archivos, y promuévelos por PR (`docs/runbooks/promover-confluence.md`). |
-| `E_VAULT_CLONE_FAILED` | El entrypoint no pudo clonar un vault de `KNOWLEDGE_VAULTS_YAML`; el mensaje nombra el slug, el remoto y la rama. Las credenciales embebidas en la URL (`https://usuario:token@…`) salen como `***`, en el mensaje y en lo que git imprime; la URL real se queda en el `vaults.resolved.yaml` y en la configuración del clon, que es lo que git necesita. Revisa que el remoto responda desde el contenedor, que la rama exista y que la llave corresponda a ese repo. No se sirve nada. |
-| `E_VAULTS_PATH_OVERLAP` | `KNOWLEDGE_VAULTS_YAML`: dos vaults ocupan el mismo directorio o uno está dentro del otro (`path` declarado, o `/data/vaults/<slug>` de un vault con `repo`; se comparan las rutas ya sin `..` ni enlaces simbólicos). Dale a cada vault su propio directorio. No se clona ni se sirve nada. |
-| `E_CHUNK_ID_INVALID` | El `chunk_id` no tiene la forma `<doc_id>:<n>` o pasa del último heading: tómalo de una fila de `search`. |
-| `E_DOC_ID_UNKNOWN` | Ningún archivo del vault tiene ese `doc_id`, ni después de releer el disco: el documento se movió o se borró; vuelve a buscar. |
-| `E_DOC_ID_AMBIGUOUS` | Dos archivos del vault comparten `doc_id`: léelos por `file_path`. |
-| `E_MEMORY_TOKEN_MISSING` | `context_pack(include_memories=true)` no lee memory porque `MEMORY_HTTP_TOKEN` no está definido; llega en `degraded`, la tool responde con el vault. |
-| `E_MEMORY_URL_NOT_LOOPBACK` | `KNOWLEDGE_MEMORY_URL` no es `http` sobre `127.0.0.1`, `localhost` o `::1`: el cliente de memory queda apagado para que el bearer no salga de la máquina, con un aviso al abrir el vault. |
-| `E_MEMORY_PROJECT_MISSING` | El vault no declara proyecto de memoria: añade `memory.project` en su entrada de `vaults.yaml` o en su `vault.yaml`. |
-| `E_SECRET_MISSING` | Transporte HTTP: un vault declara en `features` una extensión que ese transporte carga (hoy, `confluence`) y faltan las variables de sus credenciales; el mensaje nombra las variables, nunca sus valores. Expórtalas (los nombres salen de `integrations.<extensión>.secrets` del `vault.yaml` o, sin ellos, `CONFLUENCE_EMAIL` y `CONFLUENCE_TOKEN`) o quita la extensión de `features`. Por stdio el servidor arranca igual y avisa con `W_EXTENSION_UNCONFIGURED`, y la llamada a `sync_confluence` sin esas variables responde este código como `isError`, con los mismos nombres. También sale cuando una entrada de `bearers` nombra un `token_env` vacío. |
-| `E_MEMORY_UNAVAILABLE` | El servidor de memory rechazó la conexión, tardó más de 1 s, respondió algo distinto de 200 (un 401 si el token no coincide) o un cuerpo que no es una lista JSON; el log dice cuál, sin token ni URL. En `memory-bridge`, también una escritura que no llegó (conexión rechazada o más de 5 s; 30 s para los runbooks) o un comando `memory` que no arranca, tarda más de 30 s o no imprime JSON: instala memory o define `MEMORY_BIN`. |
-| `E_MEMORY_WRITE_FAILED` | `memory-bridge` (o `reindex` de un vault con `memory-bridge`): el servidor de memory rechazó una escritura. El reporte trae `http_status` y `reason` con el código propio de memory (`invalid_field`, `vault_not_found`, `vault_scan_failed`, `payload_too_large` para un 413, `unauthorized` si el token no coincide), nunca el cuerpo de la respuesta ni el token. |
-| `E_FEATURE_DISABLED` | Un comando o una tool de una extensión sobre un vault que no la declara, o una tool cuya extensión no declara ningún vault servido (`get_flow` sin `flows`, por ejemplo); el mensaje nombra los vaults que sí la declaran: añade la extensión (por ejemplo `memory-bridge`) a `features` del `vault.yaml` por PR del vault, o elige otro vault con `--vault` (o `vault=` en la tool). |
-| `E_TOOL_RETIRED` | Una llamada a una tool que el contrato retiró (`search_code`, desde 2.0.0): el mensaje dice qué usar en su lugar (`graphify explain`, `graphify affected`, `rg`, `search`). El perfil `legacy` (`serve --profile legacy` o `KNOWLEDGE_PROFILE=legacy`) la sirve durante una release. |
-| `E_JIRA_UNAVAILABLE` | `sync_jira` o `jira sync`: Jira no respondió con una página de issues (consulta rechazada con 400, revisa `integrations.jira.projects` y `jql_extra`; 5xx; más de 10 s; cuerpo que no es JSON; un 429 que se repite tras un reintento). No se escribe nada en memory ni avanza el cursor. Ver `docs/runbooks/sincronizar-jira.md`. |
-| `E_JIRA_SYNC_STALLED` | `sync_jira` o `jira sync`: la corrida quedó truncada y todos sus issues se actualizaron en el minuto donde empieza, así que el cursor no puede avanzar (JQL compara minutos). Sube `--max-issues`, acota `integrations.jira.jql_extra` o pasa un `since` posterior. No se escribe nada en memory ni avanza el cursor. |
-| `E_JIRA_AUTH_FAILED` | Jira rechazó el correo y el API token de las variables que nombra `integrations.jira.secrets` (401 o 403): genera otro token para esa cuenta o revisa que la cuenta vea el proyecto. |
-| `E_KNOWLEDGE_REF_INVALID` | `memory-bridge promote stamp`: `--knowledge-ref` no es la ruta relativa al vault de un `.md` que existe en él (sin `/` inicial, sin `..`). Usa la ruta del documento que mergeó el PR, tras actualizar el checkout. |
-| `E_CONTEXTS_INVALID` | `init`: el `Contexts/config.json` de un vault, o el `repos.local.json` de esta máquina para ese vault, no se puede leer o no tiene la forma del registro (`repos.roots`, `repos.entries`, o una entrada con un `path` que sale de su raíz con `..`; un registro vacío, `[]` y `[]`, es válido en un vault y significa que no declara aplicaciones); el mensaje nombra el archivo y la clave. Corrige el `Contexts/config.json` por PR del vault, o borra el `repos.local.json` y vuelve a correr `cloudfrog-knowledge init`. Los demás vaults se inicializan igual y el comando sale con 1. |
-| `E_ROOT_UNKNOWN` | `init --root NOMBRE=DIR`: ningún vault que se inicializa declara la raíz `NOMBRE` en su `Contexts/config.json`. Revisa el nombre (`python3 -m knowledge.repos --vault-dir <vault> --json` lista las raíces) o usa `--root <slug>:NOMBRE=DIR`. No se escribe nada. |
-| `E_CONTEXTS_REPO_UNKNOWN` | `init --repo ID` o `init --drop ID`: ningún vault que se inicializa declara el checkout `ID` en su `Contexts/config.json` (con `--repo SLUG:ID`, el vault `SLUG` no lo declara). No se escribe nada y el código es 2. Revisa el id con `python3 -m knowledge.repos --vault-dir <vault> --json`. |
-| `E_CONTEXTS_CONFLICT` | `doctor --client`: el paquete de un checkout no se puede instalar porque el checkout ya tiene ahí un archivo, directorio o enlace propio sin versionar (el mensaje nombra la aplicación, la ruta y la entrada). Lo que el checkout versiona en git nunca es conflicto. Corre `init --force` para apartarlo como `<nombre>.pre-ai-context.bak-<epoch>` (nada se borra) o quítalo a mano. |
-| `E_CONTEXTS_CHECKOUT_INVALID` | `doctor --client`: un checkout no es el repositorio declarado (su `origin` es otro), no es un repositorio git o su `origin` no se puede leer (`unverified`), o su paquete no se puede instalar en él (un paquete sin `CLAUDE.md`, un checkout sin git y sin `--exclude gitignore`, un checkout dentro de un vault). Corrige la raíz o fija `repos.<id>` en el `repos.local.json`; un checkout que sabes que es el declarado se instala con `init --force`. |
-| `W_CONTEXTS_CHECKOUT_UNVERIFIED` | `doctor --client`, aviso con código 0: un checkout es un repositorio git sin remoto `origin` (un clon que todavía no se publica), así que no se puede verificar ni descartar. `init` lo sigue reportando `unverified` y no instala nada en él sin `--force`. Dale su `origin` cuando el repositorio exista, o instálalo con `init --force` si sabes que es el declarado. |
-| `W_CONTEXTS_LINKED_NOT_SELECTED` | `init` y `doctor --client`, aviso con código 0: un checkout tiene enlaces hacia su paquete (`Contexts/<paquete>/`) y no está en la lista `apply` del `repos.local.json` de la máquina, así que `init` ya no lo mantiene. Agrégalo con `init --repo ID` o quita sus enlaces con `init --drop ID`. |
-| `W_CONTEXTS_SELECTION_MISSING` | `doctor --client`, aviso con código 0: el `repos.local.json` de la máquina no tiene la lista `apply` (lo escribió un `init` anterior a ella). El próximo `init` la crea con los checkouts que ya tienen su paquete instalado; para elegir otros, `init --repo ID` o `init --all`. |
+| `E_VAULT_PATH_MISSING` | Set `VAULT_PATH` to a clone of the vault's repository (or `vault_path` in `config.json`, or a `vaults.yaml`). This repository ships no vault. |
+| `E_VAULT_PATH_NOT_DIR` | The path does not exist: mount the volume there, or check that the `VAULT_REMOTE` clone at `VAULT_BRANCH` contains it. |
+| `E_DEPLOY_KEY_MISSING` | `VAULT_REMOTE` is set and `GIT_DEPLOY_KEY_B64` is empty: load it, or empty `VAULT_REMOTE`. |
+| `E_EMBEDDINGS_KEY_MISSING` | Set the variable named by `key_env` (`OPENAI_API_KEY` by default) or use the `none` provider. |
+| `E_EMBEDDINGS_PROVIDER_UNKNOWN` | Use `openai`, `none` or `bag-of-words`. |
+| `E_HTTP_API_KEY_MISSING` | Set `MCP_API_KEY` (or `MCP_ADMIN_KEY`, or `bearers` in `vaults.yaml`) for the HTTP transport. |
+| `E_SCOPE_REQUIRED` | The call's bearer lacks the `admin` scope: `reindex` and `sync_confluence` respond `isError` with this code, and `POST /webhook/reindex` with a manual bearer, 403. Use the `MCP_ADMIN_KEY` bearer or a `bearers` entry with `scopes: [read, admin]`. |
+| `E_HTTP_PORT_INVALID` | `MCP_HTTP_PORT` must be a valid integer. |
+| `E_CONFIG_JSON_INVALID` | The `config.json` exists but cannot be read or is not a JSON object: fix it or remove it. |
+| `E_INDEX_PROVIDER_MISMATCH` | Warning in the log: the index was built with another provider, model or chunk plan, and the server empties it and re-embeds the whole vault before responding (with `openai`, the cost of a full reindex). |
+| `E_INDEX_VERSION_NEWER` | The `index.sqlite` was written by a newer package than the installed one: upgrade `cloudfrog-knowledge` or point the vault to another index directory. `migrate-index` exits with code 2. |
+| `E_INDEX_UNREADABLE` | The `index.sqlite` is not a SQLite database or SQLite cannot read it (truncated or foreign file). `migrate-index` exits with code 2 and startup stops: move the file elsewhere and the index is rebuilt empty on the next run. An unreadable `link_graph.json` in the Chroma directory stops nothing: the learned weights are skipped with a warning in the log. |
+| `E_SQLITE_VEC_UNAVAILABLE` | `KNOWLEDGE_REQUIRE_SQLITE_VEC=1` and the `sqlite-vec` extension does not load in this Python: use a Python with loadable extensions (`uvx --managed-python`, the image's) or remove the variable to accept the slower `python` fallback. `doctor` and `/health` say which `vector_backend` is serving. |
+| `E_PRUNE_REFUSED` | `migrate-index --prune-chroma` deletes nothing in a directory that is or contains a registered vault: check `--from-chroma`. |
+| `E_VAULTS_FILE_MISSING` | `KNOWLEDGE_VAULTS` points to a file that does not exist. |
+| `E_MANIFEST_INVALID` | The message carries the key path: fix that key in `vaults.yaml` or `vault.yaml`. In `integrations.<confluence|jira>`, `site` must be `https` on `*.atlassian.net` or on a host in `KNOWLEDGE_INTEGRATION_SITES` (`http` only on loopback) and `secrets.email_env` and `secrets.token_env` must name a variable of that integration with the vault's prefix (`ACME_JIRA_EMAIL` for `acme`; without a prefix, such as `CONFLUENCE_TOKEN`, only the default vault), never a server secret or another vault's variable. It also appears when `MCP_ADMIN_KEY` equals `MCP_API_KEY` or two `bearers` entries resolve to the same token: generate a different one with `openssl rand -hex 32`. |
+| `E_SECRET_IN_MANIFEST` | Something shaped like a credential is in the file: delete it, rotate it and reference an environment variable. |
+| `E_VAULT_SLUG_INVALID` | The slug does not match the pattern in section 3. |
+| `E_VAULT_SLUG_DUPLICATE` | Two entries with the same slug. |
+| `E_VAULT_SLUG_MISMATCH` | The `vault.yaml` declares a slug different from the registry's: make them match. |
+| `E_VAULT_DEFAULT_AMBIGUOUS` | More than one entry with `default: true`. |
+| `E_VAULT_DEFAULT_MISSING` | There are several vaults and none is `default: true`. |
+| `E_VAULT_MANIFEST_MISSING` | The registry requires a `vault.yaml` in the vault and it is not there. |
+| `E_VAULT_UNKNOWN` | The requested slug is not registered: at startup, or in the `vault=` of a tool call (the message lists the registered slugs). |
+| `E_EVAL_UNAVAILABLE` | `eval` needs `scripts/`, which does not ship in the image or the package. |
+| `E_LINT_PATH_NOT_DIR` | `vault-lint` received a path that is not a directory. |
+| `E_KNOWLEDGE_HOME_NOT_WRITABLE` | `doctor` found that the data directory (`KNOWLEDGE_HOME` or `data_dir` of `vaults.yaml`) cannot be written: point it to a writable directory. |
+| `E_FRONTMATTER_UNPARSEABLE` | A frontmatter is not valid YAML: fix it in a vault PR. |
+| `E_FRONTMATTER_NOT_MAPPING` | The frontmatter must be a key-value map. |
+| `E_WIKILINK_UNRESOLVED` | A wikilink does not point to any file in the vault. |
+| `E_LINT_RULES_UNKNOWN` | `vault-lint --rules` accepts only `1.2` (the rules `reindex.validation` counts) and `1.3` (those of `1.2` plus the vault's). |
+| `E_FRONTMATTER_LAST_UPDATED` | `vault-lint` (rules 1.3): the note has no `last_updated` or it is not an ISO date, and `get_stale_docs` cannot measure its age. `vault-lint --fix` takes it from `updated`, `last_review` or `last_verified.date` if any of them is a date; the rest is done by hand in a vault PR. |
+| `E_SCOPE_FOREIGN` | `vault-lint` (rules 1.3): the note's `scope` is not the vault's `slug`, `global`, or one of the `scopes` its `vault.yaml` declares; it is another vault's convention. Move the note there, or declare the scope in `scopes:` if the vault uses it on purpose. |
+| `E_PATH_CASE_COLLISION` | `vault-lint` (rules 1.3): two paths, or a directory, differ only by case or by the Unicode form of the name, and collide on a disk that is case-insensitive or that normalizes. Rename one. |
+| `E_PATH_NOT_NFC` | `vault-lint` (rules 1.3): the path is not in Unicode NFC form. Rename it with the NFC form of the same name. |
+| `E_RUNBOOK_ID_INVALID` | `vault-lint` (rules 1.3): a runbook (`type: runbook` under `runbooks.dir`, not a template) without an `id` of the form `RB-NNN`. The memory server skips it on rescan. |
+| `E_RUNBOOK_STATUS_INVALID` | `vault-lint` (rules 1.3): a runbook's `status` is not `draft`, `verified` or `outdated`. |
+| `E_RUNBOOK_SERVICE_UNKNOWN` | `vault-lint` (rules 1.3): a runbook's `service` is not a `slug` or alias in `Runbooks/services.json` (or in the manifest's `runbooks.services_file`). |
+| `E_SERVICES_MAP_INVALID` | `vault-lint` (rules 1.3): `services.json` is not `{"services": [{"slug", "aliases"}]}`, or declares no service. With the file broken, runbooks' `service` is not checked. |
+| `E_PROFILE_UNKNOWN` | The requested tool profile does not exist. |
+| `E_OUTPUT_SETTING_INVALID` | `KNOWLEDGE_STRUCTURED_OUTPUT` accepts only `0` (default: text blocks only) or `1` (catalog with `outputSchema` and responses with `structuredContent`); `KNOWLEDGE_TEXT_INDENT` accepts an integer from 1 to 8 (indentation of each response's text; if undefined, compact JSON). |
+| `E_FIELD_UNKNOWN` | A call's `fields` names a key the tool does not have, or is empty: the message carries the allowed list. |
+| `E_ARGUMENT_CONFLICT` | Two arguments are mutually exclusive: in `get_document`, `chunk_id` with `section`, `start_line` or `end_line`, or a `chunk_id` from another document (the message names which); in `search_by_metadata`, `fields` with `facets=True`. |
+| `E_ARGUMENT_OUT_OF_RANGE` | An argument is out of its range: `limit` outside 1-50 in `search`, 1-20 in `search_deep`, 1-200 in `search_by_metadata`, `get_related` and `suggest_links` or 1-500 in `get_stale_docs`, negative `offset` in `search_by_metadata`, `max_items` outside 0-1000 in `get_impact`, `budget_tokens` outside [500, 12000] in `context_pack`, or `max_chars` less than 1 in `get_document`. |
+| `E_ARGUMENT_RETIRED` | A parameter the contract retired and the schema still declares so as to warn instead of ignoring it: `include_metadata` of `get_document`, retired in 2.0.0. Use `full_metadata=true` for the whole frontmatter, or `fields` without `metadata` to leave it out. |
+| `E_ARGUMENT_MISSING` | The call does not name what to act on: `get_document` without `file_path` or `chunk_id`. Pass the `chunk_id` of a `search` row. |
+| `E_FILE_NOT_FOUND` | `get_document` on a path that is not a file in the vault: take `file_path` from a `search` row, relative to the vault and without wikilink brackets. |
+| `E_SECTION_NOT_FOUND` | `get_document(section=...)` with a heading the document does not have: the message lists up to 20 of its headings. |
+| `E_FILE_NOT_IN_GRAPH` | `find_path` with an endpoint that is not in the link graph: no wikilink reaches it and it links to nothing, or it is not a document in the vault. Take `file_path` from a `search` row. |
+| `E_FLOW_NOT_FOUND` | `get_flow` or `compare_flows` with a provider for which the vault has no flow document (a `Flow - <provider>.md` note); `compare_flows` names all the missing ones. `search(query='flow')` lists the ones that exist. |
+| `E_SCOPE_EMPTY` | `sync_confluence` with a `scope_prefix` in which no file has `confluence_id`: the scope is wrong or the pages still need mapping. The message names up to 20 files with `confluence_id` outside the scope; pass the `scope_prefix` that contains them. |
+| `E_RERANK_NOT_CONFIGURED` | `search(rerank="on")` on a vault whose `vault.yaml` does not declare `rerank.provider`: the caller asked for a judge the vault does not have. Omit `rerank` or ask the vault owner to declare the `rerank` block through a PR; the key is never declared, only the name of its variable. |
+| `E_EXPORT_FAILED` | `confluence export` could not read the vault or prepare `--out` outside a specific page: check the permissions of the two paths. A page that fails on its own goes in the JSON's `errors` and the exit code is 1. |
+| `E_WRITE_FENCED` | A write would land inside a vault: `sync_confluence(dry_run=False)` always, `confluence export` with an `--out` (or a symlink) inside a served vault, or `vault-lint --fix` on a served vault (or with its `--out` inside one): run `--fix` in a checkout that is not served or with `--out DIR` outside every vault. Use `dry_run=True` for the report and `confluence export --out <dir outside the vault>` for the files, and promote them through a PR ([`docs/runbooks/promote-confluence.md`](promote-confluence.md)). |
+| `E_VAULT_CLONE_FAILED` | The entrypoint could not clone a vault from `KNOWLEDGE_VAULTS_YAML`; the message names the slug, the remote and the branch. Credentials embedded in the URL (`https://user:token@…`) appear as `***`, in the message and in what git prints; the real URL stays in `vaults.resolved.yaml` and in the clone's configuration, which is what git needs. Check that the remote responds from the container, that the branch exists and that the key matches that repo. Nothing is served. |
+| `E_VAULTS_PATH_OVERLAP` | `KNOWLEDGE_VAULTS_YAML`: two vaults occupy the same directory or one is inside the other (a declared `path`, or `/data/vaults/<slug>` of a vault with `repo`; paths are compared after removing `..` and resolving symlinks). Give each vault its own directory. Nothing is cloned or served. |
+| `E_CHUNK_ID_INVALID` | The `chunk_id` does not have the form `<doc_id>:<n>` or goes past the last heading: take it from a `search` row. |
+| `E_DOC_ID_UNKNOWN` | No file in the vault has that `doc_id`, even after re-reading the disk: the document was moved or deleted; search again. |
+| `E_DOC_ID_AMBIGUOUS` | Two files in the vault share a `doc_id`: read them by `file_path`. |
+| `E_MEMORY_TOKEN_MISSING` | `context_pack(include_memories=true)` does not read memory because `MEMORY_HTTP_TOKEN` is not defined; it arrives in `degraded`, and the tool responds with the vault. |
+| `E_MEMORY_URL_NOT_LOOPBACK` | `KNOWLEDGE_MEMORY_URL` is not `http` over `127.0.0.1`, `localhost` or `::1`: the memory client is turned off so the bearer does not leave the machine, with a warning when the vault is opened. |
+| `E_MEMORY_PROJECT_MISSING` | The vault declares no memory project: add `memory.project` in its `vaults.yaml` entry or in its `vault.yaml`. |
+| `E_SECRET_MISSING` | HTTP transport: a vault declares in `features` an extension that this transport loads (today, `confluence`) and its credentials' variables are missing; the message names the variables, never their values. Export them (the names come from `integrations.<extension>.secrets` in `vault.yaml` or, without them, `CONFLUENCE_EMAIL` and `CONFLUENCE_TOKEN`) or remove the extension from `features`. Over stdio the server starts anyway and warns with `W_EXTENSION_UNCONFIGURED`, and the `sync_confluence` call without those variables responds with this code as `isError`, with the same names. It also appears when a `bearers` entry names an empty `token_env`. |
+| `E_MEMORY_UNAVAILABLE` | The memory server refused the connection, took longer than 1 s, responded with anything other than 200 (a 401 if the token does not match) or a body that is not a JSON list; the log says which, without token or URL. In `memory-bridge`, also a write that did not arrive (connection refused or more than 5 s; 30 s for runbooks) or a `memory` command that does not start, takes longer than 30 s or does not print JSON: install memory or set `MEMORY_BIN`. |
+| `E_MEMORY_WRITE_FAILED` | `memory-bridge` (or `reindex` of a vault with `memory-bridge`): the memory server rejected a write. The report carries `http_status` and `reason` with memory's own code (`invalid_field`, `vault_not_found`, `vault_scan_failed`, `payload_too_large` for a 413, `unauthorized` if the token does not match), never the response body or the token. |
+| `E_FEATURE_DISABLED` | A command or a tool of an extension on a vault that does not declare it, or a tool whose extension no served vault declares (`get_flow` without `flows`, for example); the message names the vaults that do declare it: add the extension (for example `memory-bridge`) to the `vault.yaml` `features` through a vault PR, or pick another vault with `--vault` (or `vault=` in the tool). |
+| `E_TOOL_RETIRED` | A call to a tool the contract retired (`search_code`, since 2.0.0): the message says what to use instead (`graphify explain`, `graphify affected`, `rg`, `search`). The `legacy` profile (`serve --profile legacy` or `KNOWLEDGE_PROFILE=legacy`) serves it for one release. |
+| `E_JIRA_UNAVAILABLE` | `sync_jira` or `jira sync`: Jira did not respond with a page of issues (query rejected with 400, check `integrations.jira.projects` and `jql_extra`; 5xx; more than 10 s; a body that is not JSON; a 429 that repeats after one retry). Nothing is written to memory and the cursor does not advance. See [`docs/runbooks/sync-jira.md`](sync-jira.md). |
+| `E_JIRA_SYNC_STALLED` | `sync_jira` or `jira sync`: the run was truncated and all its issues were updated in the minute where it starts, so the cursor cannot advance (JQL compares minutes). Raise `--max-issues`, narrow `integrations.jira.jql_extra` or pass a later `since`. Nothing is written to memory and the cursor does not advance. |
+| `E_JIRA_AUTH_FAILED` | Jira rejected the email and API token from the variables named by `integrations.jira.secrets` (401 or 403): generate another token for that account or check that the account can see the project. |
+| `E_KNOWLEDGE_REF_INVALID` | `memory-bridge promote stamp`: `--knowledge-ref` is not the vault-relative path of a `.md` that exists in it (no leading `/`, no `..`). Use the path of the document the PR merged, after updating the checkout. |
+| `E_CONTEXTS_INVALID` | `init`: a vault's `Contexts/config.json`, or this machine's `repos.local.json` for that vault, cannot be read or does not have the registry's shape (`repos.roots`, `repos.entries`, or an entry with a `path` that leaves its root with `..`; an empty registry, `[]` and `[]`, is valid in a vault and means it declares no applications); the message names the file and the key. Fix the `Contexts/config.json` through a vault PR, or delete the `repos.local.json` and run `cloudfrog-knowledge init` again. The other vaults are initialized anyway and the command exits with 1. |
+| `E_ROOT_UNKNOWN` | `init --root NAME=DIR`: no vault being initialized declares the root `NAME` in its `Contexts/config.json`. Check the name (`python3 -m knowledge.repos --vault-dir <vault> --json` lists the roots) or use `--root <slug>:NAME=DIR`. Nothing is written. |
+| `E_CONTEXTS_REPO_UNKNOWN` | `init --repo ID` or `init --drop ID`: no vault being initialized declares the checkout `ID` in its `Contexts/config.json` (with `--repo SLUG:ID`, the vault `SLUG` does not declare it). Nothing is written and the code is 2. Check the id with `python3 -m knowledge.repos --vault-dir <vault> --json`. |
+| `E_CONTEXTS_CONFLICT` | `doctor --client`: a checkout's package cannot be installed because the checkout already has an unversioned file, directory or link of its own there (the message names the application, the path and the entry). What the checkout versions in git is never a conflict. Run `init --force` to set it aside as `<name>.pre-ai-context.bak-<epoch>` (nothing is deleted) or remove it by hand. |
+| `E_CONTEXTS_CHECKOUT_INVALID` | `doctor --client`: a checkout is not the declared repository (its `origin` is another one), is not a git repository or its `origin` cannot be read (`unverified`), or its package cannot be installed in it (a package without `CLAUDE.md`, a checkout without git and without `--exclude gitignore`, a checkout inside a vault). Fix the root or set `repos.<id>` in `repos.local.json`; a checkout you know is the declared one is installed with `init --force`. |
+| `W_CONTEXTS_CHECKOUT_UNVERIFIED` | `doctor --client`, warning with code 0: a checkout is a git repository without an `origin` remote (a clone not yet published), so it can be neither verified nor ruled out. `init` still reports it as `unverified` and installs nothing in it without `--force`. Give it its `origin` when the repository exists, or install it with `init --force` if you know it is the declared one. |
+| `W_CONTEXTS_LINKED_NOT_SELECTED` | `init` and `doctor --client`, warning with code 0: a checkout has links to its package (`Contexts/<package>/`) and is not in the machine's `repos.local.json` `apply` list, so `init` no longer maintains it. Add it with `init --repo ID` or remove its links with `init --drop ID`. |
+| `W_CONTEXTS_SELECTION_MISSING` | `doctor --client`, warning with code 0: the machine's `repos.local.json` has no `apply` list (it was written by an `init` that predates it). The next `init` creates it with the checkouts that already have their package installed; to pick others, `init --repo ID` or `init --all`. |
 
-Los avisos (`W_*`) no detienen el arranque, pero hay que leerlos: `W_REVIEW_THRESHOLDS_FALLBACK`, `W_VAULT_REFRESH_FAILED` (el entrypoint no pudo actualizar el clon de un vault y sirve lo que hay en disco), `W_WEBHOOK_SECRET_MISSING`, `W_VAULT_PATH_IGNORED`, `W_VAULT_SLUG_MISMATCH`, `W_FEATURE_WITHOUT_REPO`, `W_VAULT_GIT_PULL_OFF` (el vault está en un checkout de git pero no declara repositorio, así que reindexar no hace `git pull`: define `VAULT_REMOTE` o `repo`), `W_CONTRACT_RANGE`, `W_TRANSPORT_UNKNOWN`, `W_WIKILINK_AMBIGUOUS_STEM`, `W_TYPE_UNKNOWN` (`vault-lint` con las reglas 1.3: el `type` de una nota está fuera de `hub`, `service`, `architecture`, `flow`, `runbook`, `convention`, `decision`, `reference`, `note`, `pendientes` y `memory`), `W_SERVICES_MAP_MISSING` (`vault-lint` con las reglas 1.3: el vault tiene runbooks y ningún `services.json` contra el cual revisar su `service`), `W_EXTENSION_UNCONFIGURED` (por stdio, una extensión declarada sin sus credenciales: el servidor arranca y solo esa extensión responde con error) `W_EXTENSION_UNAVAILABLE_HTTP` (por HTTP, un vault declara `jira` o `memory-bridge`, que escriben en un memory local y no se cargan en un despliegue: sus tools no aparecen; también nombra una clave que solo esas extensiones leen, como `integrations.jira.kind_map` o `memory.hub`, con un valor que por stdio sería `E_MANIFEST_INVALID`), `W_BEARERS_IGNORED_STDIO` (`vaults.yaml` declara `bearers` y el servidor corre por stdio, donde no se comprueba ningún bearer), `W_RERANK_KEY_MISSING` (un vault declara un proveedor de `rerank` y la variable de su clave, que el aviso nombra, está vacía: el servidor arranca, también por HTTP, y ese vault busca sin juez hasta que la exportes) `W_RERANK_INVALID` (el bloque `rerank` de un `vault.yaml`, o una variable `KNOWLEDGE_RERANK*`, está mal formado: solo ese vault queda sin juez; el aviso nombra la clave a corregir) , `W_CONTEXTS_INIT_PENDING` (`doctor` por stdio, o `doctor --client` en cualquier transporte: un vault servido declara `Contexts/config.json` y esta máquina no tiene su `repos.local.json`, o con `--client` le queda algún checkout por instalar; los paquetes de contexto no están enlazados en los checkouts hasta que corras `cloudfrog-knowledge init` o el comando que nombre `KNOWLEDGE_COMMAND_LABEL`), `W_CONTEXTS_CHECKOUT_UNVERIFIED` (`doctor --client`: un checkout es un repositorio git sin remoto `origin`; código 0, ver la tabla de arriba), `W_CONTEXTS_LINKED_NOT_SELECTED` y `W_CONTEXTS_SELECTION_MISSING` (`init` y `doctor --client`: la selección `apply` de la máquina; código 0, ver la tabla de arriba) y `W_CONTEXTS_GITIGNORE` (`init`: el `.gitignore` de un vault que es un repositorio git no cubre `Contexts/*/.claude/settings.local.json`, `agent-memory/` o `worktrees/`, que Claude Code escribe en el vault a través de un paquete enlazado; no bloquea, y se corrige por PR del vault).
+Warnings (`W_*`) do not stop startup, but they must be read: `W_REVIEW_THRESHOLDS_FALLBACK`, `W_VAULT_REFRESH_FAILED` (the entrypoint could not update a vault's clone and serves what is on disk), `W_WEBHOOK_SECRET_MISSING`, `W_VAULT_PATH_IGNORED`, `W_VAULT_SLUG_MISMATCH`, `W_FEATURE_WITHOUT_REPO`, `W_VAULT_GIT_PULL_OFF` (the vault is in a git checkout but declares no repository, so reindexing does not `git pull`: set `VAULT_REMOTE` or `repo`), `W_CONTRACT_RANGE`, `W_TRANSPORT_UNKNOWN`, `W_WIKILINK_AMBIGUOUS_STEM`, `W_TYPE_UNKNOWN` (`vault-lint` with rules 1.3: a note's `type` is outside `hub`, `service`, `architecture`, `flow`, `runbook`, `convention`, `decision`, `reference`, `note`, `pendientes` and `memory`), `W_SERVICES_MAP_MISSING` (`vault-lint` with rules 1.3: the vault has runbooks and no `services.json` against which to check their `service`), `W_EXTENSION_UNCONFIGURED` (over stdio, an extension declared without its credentials: the server starts and only that extension responds with an error), `W_EXTENSION_UNAVAILABLE_HTTP` (over HTTP, a vault declares `jira` or `memory-bridge`, which write to a local memory and are not loaded in a deployment: their tools do not appear; it also names a key that only those extensions read, such as `integrations.jira.kind_map` or `memory.hub`, with a value that over stdio would be `E_MANIFEST_INVALID`), `W_BEARERS_IGNORED_STDIO` (`vaults.yaml` declares `bearers` and the server runs over stdio, where no bearer is checked), `W_RERANK_KEY_MISSING` (a vault declares a `rerank` provider and the variable of its key, which the warning names, is empty: the server starts, also over HTTP, and that vault searches without a judge until you export it), `W_RERANK_INVALID` (a `vault.yaml` `rerank` block, or a `KNOWLEDGE_RERANK*` variable, is malformed: only that vault is left without a judge; the warning names the key to fix), `W_CONTEXTS_INIT_PENDING` (`doctor` over stdio, or `doctor --client` on any transport: a served vault declares `Contexts/config.json` and this machine has no `repos.local.json` for it, or with `--client` some checkout remains to be installed; the context packages are not linked into the checkouts until you run `cloudfrog-knowledge init` or the command named by `KNOWLEDGE_COMMAND_LABEL`), `W_CONTEXTS_CHECKOUT_UNVERIFIED` (`doctor --client`: a checkout is a git repository without an `origin` remote; code 0, see the table above), `W_CONTEXTS_LINKED_NOT_SELECTED` and `W_CONTEXTS_SELECTION_MISSING` (`init` and `doctor --client`: the machine's `apply` selection; code 0, see the table above) and `W_CONTEXTS_GITIGNORE` (`init`: the `.gitignore` of a vault that is a git repository does not cover `Contexts/*/.claude/settings.local.json`, `agent-memory/` or `worktrees/`, which Claude Code writes into the vault through a linked package; it does not block, and is fixed through a vault PR).

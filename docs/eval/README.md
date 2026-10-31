@@ -1,68 +1,68 @@
-# Evaluación de retrieval
+# Retrieval evaluation
 
-Un **golden set** es una lista de consultas reales con los documentos que las responden, etiquetadas leyendo los documentos, nunca copiando lo que devuelve el buscador (eso haría circular la medición). `scripts/eval_retrieval.py` lo corre contra un servidor por el contrato de tools —una llamada `search` por consulta— y publica recall@k, precisión@k, MRR@k y tokens por consulta.
+A **golden set** is a list of real queries together with the documents that answer them, labeled by reading the documents, never by copying what the search engine returns (that would make the measurement circular). `scripts/eval_retrieval.py` runs it against a server through the tool contract — one `search` call per query — and publishes recall@k, precision@k, MRR@k and tokens per query.
 
-Los sets y las mediciones son contenido de cada vault, no del servidor: cada vault guarda los suyos en `Eval/` (`Eval/queries.yaml`, y `Eval/Results/` para los reportes), y cada medición nombra el commit exacto del vault contra el que corrió. Este repositorio solo conserva el set de la fixture:
+The sets and the measurements are content of each vault, not of the server: each vault keeps its own in `Eval/` (`Eval/queries.yaml`, and `Eval/Results/` for the reports), and each measurement names the exact vault commit it ran against. This repository keeps only the fixture's set:
 
-| Set | Vault | Para qué |
+| Set | Vault | Purpose |
 |---|---|---|
-| `tests/fixtures/eval/queries.yaml` | `tests/fixtures/vault/` | Ejercita el harness en la suite (`tests/test_eval_retrieval.py`), con el doble de embeddings bag-of-words. Sus números no dicen nada de la calidad real. |
+| `tests/fixtures/eval/queries.yaml` | `tests/fixtures/vault/` | Exercises the harness in the suite (`tests/test_eval_retrieval.py`), with the bag-of-words embeddings double. Its numbers say nothing about real quality. |
 
-Quien edite el set de un vault comprueba que todas las rutas existen y que cada `answer_terms` aparece en el documento principal (la suite no lo hace: ningún test lee un vault real). El comando no levanta ningún servidor ni usa clave:
+Whoever edits a vault's set checks that all the paths exist and that each `answer_terms` entry appears in the main document (the suite does not do this: no test reads a real vault). The command starts no server and uses no key:
 
 ```bash
 uv run python scripts/eval_retrieval.py --check-labels --vault "$VAULT" --queries "$VAULT/Eval/queries.yaml"
 ```
 
-## Formato
+## Format
 
 ```yaml
 version: 1
-vault: acme               # slug del vault al que apuntan las rutas
-k: 5                      # corte de las métricas y `limit` de cada search
+vault: acme               # slug of the vault the paths point to
+k: 5                      # metrics cutoff and `limit` of each search
 queries:
-  - id: acme-001          # único dentro del set
+  - id: acme-001          # unique within the set
     lang: es              # es | en
     query: "¿Cómo resuelve el servicio el tenant de una petición?"
-    expected:             # 1 a 3 rutas relativas a la raíz del vault, la principal primero
+    expected:             # 1 to 3 paths relative to the vault root, the main one first
       - "Architecture/Tenants.md"
-    answer_terms:         # opcional, 2 a 4 literales del pasaje de expected[0] que responde la pregunta
+    answer_terms:         # optional, 2 to 4 literals from the passage of expected[0] that answers the question
       - "TenantResolver"
       - "X-Tenant-ID"
-    note: "por qué ese documento responde"   # opcional
+    note: "why that document answers"   # optional
 ```
 
-`answer_terms` se copian del documento, igual que `expected`, nunca de la salida del servidor. Una lectura "cubre" la consulta cuando contiene todos los términos; así se mide si el lector obtuvo la respuesta sin depender de qué herramienta o qué chunking produjo la lectura. Es una clave opcional dentro de `version: 1`: el cargador ignora las claves desconocidas por consulta y lee esta si existe.
+`answer_terms` are copied from the document, like `expected`, never from the server's output. A read "covers" the query when it contains all the terms; this measures whether the reader obtained the answer without depending on which tool or which chunking produced the read. It is an optional key within `version: 1`: the loader ignores unknown per-query keys and reads this one if it exists.
 
-Las rutas van sin prefijo de vault y sin corchetes de wikilink, igual que `file_path` en las respuestas del servidor. Las notas `paraphrase:` marcan consultas que no repiten las palabras del título (caso de desajuste léxico) y `cross-lingual:` las que preguntan en un idioma por un documento escrito en el otro.
+Paths go without a vault prefix and without wikilink brackets, like `file_path` in the server's responses. `paraphrase:` notes mark queries that do not repeat the words of the title (the lexical-mismatch case) and `cross-lingual:` marks those that ask in one language for a document written in the other.
 
-### Set de control
+### Control set
 
-Cuando un ajuste (el rerank de `search`, un barrido de hiperparámetros) se elige midiendo variantes sobre un set, medirlo solo ahí reproduce el ajuste, no lo valida. Para validarlo hace falta un set aparte, congelado sin que ninguna corrida con el ajuste lo hubiera leído: otras consultas, ningún documento principal en común con el set de ajuste y, junto al archivo, su `sha256` anotado en el reporte que respalda los números. Si una etiqueta resulta mal escrita, se corrige en un set nuevo con su propio hash, nunca en el congelado.
+When a tuning (the `search` rerank, a hyperparameter sweep) is chosen by measuring variants on a set, measuring it only there reproduces the tuning, it does not validate it. To validate it you need a separate set, frozen without any run with the tuning having read it: different queries, no main document in common with the tuning set and, next to the file, its `sha256` recorded in the report that backs the numbers. If a label turns out to be wrong, it is corrected in a new set with its own hash, never in the frozen one.
 
-## Cómo se corre
+## How to run it
 
-El comando es un script y no un subcomando de `cloudfrog-knowledge`: el entry point importa `knowledge.server`, y ese import ejecuta `config.validate()`, que exige `OPENAI_API_KEY` y `VAULT_PATH` incluso para hablar con un servidor remoto. Además, el tokenizer (`tiktoken`) y `pyyaml` son dependencias de desarrollo y no deben viajar en la distribución. Cuando el entry point pase a `knowledge.cli` con la configuración fuera del import, `cloudfrog-knowledge eval` envuelve este mismo script.
+The command is a script and not a `cloudfrog-knowledge` subcommand: the entry point imports `knowledge.server`, and that import runs `config.validate()`, which requires `OPENAI_API_KEY` and `VAULT_PATH` even to talk to a remote server. In addition, the tokenizer (`tiktoken`) and `pyyaml` are development dependencies and must not ship in the distribution. When the entry point moves to `knowledge.cli` with the configuration out of the import, `cloudfrog-knowledge eval` wraps this same script.
 
-Contra un servidor local por stdio (indexa el vault en un directorio temporal; la clave se inyecta solo por entorno, nunca en un archivo ni en un argumento):
+Against a local stdio server (it indexes the vault in a temporary directory; the key is injected through the environment only, never in a file or an argument):
 
 ```bash
 OPENAI_API_KEY="$(op item get OPENAI_API_KEY --fields api_key --reveal)" uv run python scripts/eval_retrieval.py --stdio --vault "$VAULT" --queries "$VAULT/Eval/queries.yaml" --json build/eval/report.json
 ```
 
-Sin clave, con un proveedor que no la necesita (`none` o `bag-of-words`). `--index-dir` fija el directorio del índice (si no, uno temporal) y `--extra-env CLAVE=VALOR`, repetible, suma una variable al entorno del servidor; `scripts/measure_tokens.py --flow` acepta las mismas tres opciones:
+Without a key, with a provider that does not need one (`none` or `bag-of-words`). `--index-dir` sets the index directory (otherwise a temporary one) and `--extra-env KEY=VALUE`, repeatable, adds a variable to the server's environment; `scripts/measure_tokens.py --flow` accepts the same three options:
 
 ```bash
 uv run python scripts/eval_retrieval.py --stdio --provider none --vault "$VAULT" --queries "$VAULT/Eval/queries.yaml" --index-dir build/eval/index-none --json build/eval/none.json
 ```
 
-Contra un despliegue HTTP (URL y bearer solo por entorno; el reporte no los contiene):
+Against an HTTP deployment (URL and bearer through the environment only; the report does not contain them):
 
 ```bash
 KNOWLEDGE_EVAL_URL=… KNOWLEDGE_EVAL_BEARER=… uv run python scripts/eval_retrieval.py --http --queries "$VAULT/Eval/queries.yaml" --json build/eval/http.json --markdown build/eval/http.md
 ```
 
-Con el juez del vault (`rerank` en su `vault.yaml`), `--rerank on|off` manda ese argumento en cada `search` (sin la opción, no se manda y rige `rerank.default`). La clave del juez llega al servidor con `--pass-env NOMBRE`, que copia la variable del entorno actual por su nombre: el valor nunca aparece en la línea de comandos, donde sí quedaría con `--extra-env`. `--cover` pide en cada `search` los campos del protocolo de lectura (`file_path`, `chunk_id`, `section`, `score`) y, terminada la última búsqueda, lee la primera fila de cada consulta con `get_document(file_path, chunk_id=…, max_chars=2000)`; las lecturas van al final para que el uso que registran no mueva ningún ranking medido. `scripts/measure_tokens.py --flow` acepta `--rerank` y `--pass-env` igual:
+With the vault's judge (`rerank` in its `vault.yaml`), `--rerank on|off` sends that argument in every `search` (without the option, it is not sent and `rerank.default` rules). The judge's key reaches the server with `--pass-env NAME`, which copies the variable from the current environment by its name: the value never appears on the command line, where it would with `--extra-env`. `--cover` asks in every `search` for the fields of the read protocol (`file_path`, `chunk_id`, `section`, `score`) and, once the last search is done, reads the first row of each query with `get_document(file_path, chunk_id=…, max_chars=2000)`; the reads go last so that the usage they record does not move any measured ranking. `scripts/measure_tokens.py --flow` accepts `--rerank` and `--pass-env` the same way:
 
 ```bash
 OPENAI_API_KEY=… ACME_TYPESAFE_API_KEY=… uv run python scripts/eval_retrieval.py --stdio --vault "$VAULT" \
@@ -70,17 +70,17 @@ OPENAI_API_KEY=… ACME_TYPESAFE_API_KEY=… uv run python scripts/eval_retrieva
   --pass-env ACME_TYPESAFE_API_KEY --rerank on --cover --json build/eval/rr-on.json
 ```
 
-El reporte JSON guarda por consulta el `_meta["knowledge/rerank"]` que devolvió el servidor, cuenta las búsquedas que el juez reordenó y por qué se omitió en las demás y, con `--index-dir`, copia la sección `rerank` del `usage_stats.json` del índice (tokens facturados, USD, cubetas de latencia del juez): de ahí sale el costo por consulta.
+The JSON report stores, per query, the `_meta["knowledge/rerank"]` the server returned, counts the searches the judge reordered and why it was skipped in the others and, with `--index-dir`, copies the `rerank` section of the index's `usage_stats.json` (billed tokens, USD, judge latency buckets): the cost per query comes from there.
 
-Cada `search` registra uso en el servidor que la recibe (el boost acotado de ranking y los pares de co-recuperación). Correr el set contra un despliegue vivo mueve un poco su ranking; repetirlo muchas veces seguidas sesga sus propios números.
+Each `search` records usage on the server that receives it (the bounded ranking boost and the co-retrieval pairs). Running the set against a live deployment moves its ranking a little; repeating it many times in a row biases its own numbers.
 
-## Métricas
+## Metrics
 
-- **recall@k**: fracción de los documentos esperados que aparecen en el top k.
-- **precisión@k**: documentos esperados en el top k divididos entre k. Con 1 a 3 esperados por consulta el máximo alcanzable queda muy por debajo de 1; el reporte imprime ese techo al lado.
-- **MRR@k**: inverso del rango del primer esperado dentro del top k (0 si no aparece).
-- **acierto@k**: fracción de consultas con al menos un esperado en el top k.
-- **hit@1** y **prim@1**: fracción de consultas cuya primera fila es un esperado, y cuya primera fila es el esperado principal (`expected[0]`).
-- **nDCG@k**: relevancia binaria, cada esperado del top k descontado por `log2(rango + 1)` y normalizado por el mejor orden posible de `min(esperados, k)` documentos.
-- **cover@1** (con `--cover`): fracción de las consultas con `answer_terms` cuya lectura de la primera fila con `get_document(chunk_id)` (el protocolo de las `instructions`, 2.000 caracteres) contiene todos los términos.
-- **tokens por consulta**: los bloques de texto de la respuesta de `search` (lo que entra al contexto del modelo), contados con tiktoken `cl100k_base`. Es un proxy: el tokenizer de Claude no es público.
+- **recall@k**: fraction of the expected documents that appear in the top k.
+- **precision@k**: expected documents in the top k divided by k. With 1 to 3 expected per query the maximum achievable is well below 1; the report prints that ceiling next to it. (The Markdown report currently labels it `precisión@k`.)
+- **MRR@k**: inverse of the rank of the first expected document within the top k (0 if it does not appear).
+- **hit rate@k**: fraction of queries with at least one expected document in the top k. (The Markdown report currently labels it `acierto@k`.)
+- **hit@1** and **prim@1**: fraction of queries whose first row is an expected document, and whose first row is the main expected document (`expected[0]`).
+- **nDCG@k**: binary relevance, each expected document in the top k discounted by `log2(rank + 1)` and normalized by the best possible order of `min(expected, k)` documents.
+- **cover@1** (with `--cover`): fraction of the queries with `answer_terms` whose read of the first row with `get_document(chunk_id)` (the `instructions` protocol, 2,000 characters) contains all the terms.
+- **tokens per query**: the text blocks of the `search` response (what enters the model's context), counted with tiktoken `cl100k_base`. It is a proxy: Claude's tokenizer is not public.

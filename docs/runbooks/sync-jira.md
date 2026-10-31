@@ -1,16 +1,16 @@
-# Sincronizar Jira con las tareas de memory
+# Sync Jira with memory tasks
 
-Runbook para quien quiere ver los issues de Jira de un proyecto en `mem_task_list` de su memory local. La extensión `jira` lee los issues de los proyectos que el vault declara y hace upsert de una tarea de memory por issue, con `jira_key` como clave. No escribe en Jira ni en el vault: lee Jira, escribe en memory y guarda su cursor junto al índice del vault.
+Runbook for whoever wants to see a project's Jira issues in `mem_task_list` of their local memory. The `jira` extension reads the issues of the projects the vault declares and upserts one memory task per issue, with `jira_key` as the key. It does not write to Jira or to the vault: it reads Jira, writes to memory, and stores its cursor next to the vault's index.
 
-Solo corre por stdio. Un despliegue HTTP no la carga (`W_EXTENSION_UNAVAILABLE_HTTP`): el memory donde escribe escucha en el loopback de la persona.
+It runs only over stdio. An HTTP deployment does not load it (`W_EXTENSION_UNAVAILABLE_HTTP`): the memory it writes to listens on the person's loopback.
 
-## Alcance
+## Scope
 
-Solo sincroniza Jira un vault que declara `integrations.jira`; `jira sync --auto` y `sync_jira` ignoran los demás. Para activarlo en un vault hay que añadir el bloque del paso 1 en un PR de ese vault y exportar `<SLUG>_JIRA_EMAIL` y `<SLUG>_JIRA_TOKEN` (con el slug del vault en mayúsculas como prefijo) en el entorno de tu sesión; ningún valor se guarda en el repo.
+Only a vault that declares `integrations.jira` syncs Jira; `jira sync --auto` and `sync_jira` ignore the others. To enable it on a vault, add the block from step 1 in a PR of that vault and export `<SLUG>_JIRA_EMAIL` and `<SLUG>_JIRA_TOKEN` (with the vault's slug in uppercase as the prefix) in your session environment; no value is stored in the repo.
 
-## 1. Declararla en el vault
+## 1. Declare it in the vault
 
-Por PR del vault, con el dueño como revisor (D-11):
+Through a vault PR, with the owner as reviewer (D-11):
 
 ```yaml
 features: [jira, memory-bridge]
@@ -20,60 +20,60 @@ integrations:
   jira:
     site: https://acme.atlassian.net
     projects: [ACME]
-    jql_extra: ""                      # opcional; se añade como AND (...)
-    kind_map: { default: feature }     # opcional; ver la tabla de abajo
-    status_map: {}                     # opcional; casi nunca hace falta
-    sync: { throttle_minutes: 60 }     # minutos entre corridas del hook de sesión
+    jql_extra: ""                      # optional; appended as AND (...)
+    kind_map: { default: feature }     # optional; see the table below
+    status_map: {}                     # optional; rarely needed
+    sync: { throttle_minutes: 60 }     # minutes between session-hook runs
     secrets: { email_env: ACME_JIRA_EMAIL, token_env: ACME_JIRA_TOKEN }
 ```
 
-Reglas que se comprueban al cargar el `vault.yaml` (`E_MANIFEST_INVALID` con la ruta de la clave):
+Rules checked when `vault.yaml` is loaded (`E_MANIFEST_INVALID` with the key path):
 
-| Clave | Regla |
+| Key | Rule |
 |---|---|
-| `site` | `https` en `*.atlassian.net` o en un host que el operador liste en `KNOWLEDGE_INTEGRATION_SITES`, sin usuario ni contraseña en la URL; `http` solo en `127.0.0.1`, `localhost` o `::1` |
-| `projects` | Lista de claves de proyecto (`ACME`, `OPS`) |
-| `secrets.email_env`, `secrets.token_env` | Nombres de variable en mayúsculas, con `JIRA` como segmento, terminados en `_EMAIL` y `_TOKEN` y con el `slug` del vault como prefijo (`ACME_JIRA_EMAIL`); sin prefijo (`JIRA_API_TOKEN`) solo el vault por defecto, y nunca la variable de otro vault. Nunca un valor: uno con forma de credencial es `E_SECRET_IN_MANIFEST` |
-| `kind_map` | Tipo de issue → `feature`, `bugfix`, `refactor`, `incident`, `migration` o `spike`; la clave `default` cubre los tipos que no nombra |
-| `status_map` | Estado de Jira → `open`, `analysis`, `in_progress`, `review`, `verified`, `done`, `blocked` o `cancelled` |
-| `sync.throttle_minutes` | Entero, 0 o más |
-| `target` | Solo `memory` |
+| `site` | `https` on `*.atlassian.net` or on a host the operator lists in `KNOWLEDGE_INTEGRATION_SITES`, with no user or password in the URL; `http` only on `127.0.0.1`, `localhost` or `::1` |
+| `projects` | List of project keys (`ACME`, `OPS`) |
+| `secrets.email_env`, `secrets.token_env` | Uppercase variable names, with `JIRA` as a segment, ending in `_EMAIL` and `_TOKEN` and with the vault's `slug` as prefix (`ACME_JIRA_EMAIL`); without a prefix (`JIRA_API_TOKEN`) only the default vault, and never another vault's variable. Never a value: one shaped like a credential is `E_SECRET_IN_MANIFEST` |
+| `kind_map` | Issue type → `feature`, `bugfix`, `refactor`, `incident`, `migration` or `spike`; the `default` key covers the types it does not name |
+| `status_map` | Jira status → `open`, `analysis`, `in_progress`, `review`, `verified`, `done`, `blocked` or `cancelled` |
+| `sync.throttle_minutes` | Integer, 0 or more |
+| `target` | `memory` only |
 
-`site`, `projects` y los dos nombres de `secrets` se exigen cuando la sincronización corre, no al cargar: la card de `memory-bridge` lee `projects` sola. Un servidor HTTP no carga `jira`, así que un valor inválido en `projects`, `jql_extra`, `kind_map`, `status_map`, `sync` o `target` solo le da `W_EXTENSION_UNAVAILABLE_HTTP`; `site` y `secrets` lo detienen por cualquier transporte.
+`site`, `projects` and the two `secrets` names are required when the sync runs, not at load time: the `memory-bridge` card reads `projects` on its own. An HTTP server does not load `jira`, so an invalid value in `projects`, `jql_extra`, `kind_map`, `status_map`, `sync` or `target` only yields `W_EXTENSION_UNAVAILABLE_HTTP` there; `site` and `secrets` stop startup over any transport.
 
-## 2. Qué viaja a memory
+## 2. What travels to memory
 
-Una tarea por issue, en serie, a `POST /projects/<memory.project>/tasks`:
+One task per issue, in series, to `POST /projects/<memory.project>/tasks`:
 
-| Campo | De dónde sale |
+| Field | Where it comes from |
 |---|---|
-| `jira_key` | La clave del issue (`ACME-1234`); una clave con otra forma se salta como `invalid_key` |
-| `title` | El resumen, hasta 300 caracteres; vacío, la clave |
-| `kind` | `kind_map[tipo]`, si no el default por tipo (`Bug` → `bugfix`, `Incident` → `incident`, `Spike` → `spike`), si no `kind_map.default`, si no `feature` |
-| `jira_status` | El nombre del estado, tal como lo da Jira |
-| `jira_status_category` | `new`, `indeterminate` o `done`, tal como lo da Jira. Si Jira da otra cosa, no viaja y el estado entra en `status_unmapped` |
-| `assignee` | El nombre visible del responsable, si hay |
-| `state` | Solo si `status_map` nombra el estado |
+| `jira_key` | The issue key (`ACME-1234`); a key of any other shape is skipped as `invalid_key` |
+| `title` | The summary, up to 300 characters; if empty, the key |
+| `kind` | `kind_map[type]`, otherwise the per-type default (`Bug` → `bugfix`, `Incident` → `incident`, `Spike` → `spike`), otherwise `kind_map.default`, otherwise `feature` |
+| `jira_status` | The status name, as Jira gives it |
+| `jira_status_category` | `new`, `indeterminate` or `done`, as Jira gives it. If Jira gives anything else, it does not travel and the status goes into `status_unmapped` |
+| `assignee` | The assignee's display name, if any |
+| `state` | Only if `status_map` names the status |
 
-memory deriva `state` de `jira_status` con su propio mapa y, si no conoce el literal, de `jira_status_category`. Por eso `status_map` casi nunca hace falta: sirve para un estado propio de la organización que memory no conoce.
+memory derives `state` from `jira_status` with its own map and, if it does not know the literal, from `jira_status_category`. That is why `status_map` is rarely needed: it serves for an organization-specific status that memory does not know.
 
-## 3. Credenciales y memory
+## 3. Credentials and memory
 
 ```bash
-# fish: exporta en tu configuración, nunca en un archivo del repo
-set -gx ACME_JIRA_EMAIL tu.correo@empresa.com
-set -gx ACME_JIRA_TOKEN <api token de id.atlassian.com>
+# fish: export these in your shell configuration, never in a file of the repo
+set -gx ACME_JIRA_EMAIL your.email@company.com
+set -gx ACME_JIRA_TOKEN <API token from id.atlassian.com>
 ```
 
-La escritura usa el bearer de memory (`MEMORY_HTTP_TOKEN`). El `memory serve` local corre hoy sin token, así que para él vale `KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0` (ver `docs/install.md`, sección del memory-bridge). Un `--dry-run` no necesita ni uno ni otro.
+The write uses memory's bearer (`MEMORY_HTTP_TOKEN`). The local `memory serve` currently runs without a token, so `KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0` applies to it (see [`docs/install.md`](../install.md), the memory-bridge section). A `--dry-run` needs neither.
 
-Crea la card del proyecto antes de la primera escritura, para que lleve el `jira_project` correcto:
+Create the project card before the first write, so it carries the correct `jira_project`:
 
 ```bash
 KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0 uv run cloudfrog-knowledge memory-bridge sync --vault acme --card
 ```
 
-## 4. Correr
+## 4. Run it
 
 ```bash
 uv run cloudfrog-knowledge doctor | jq '.vaults[] | select(.slug=="acme") | .jira'
@@ -82,29 +82,29 @@ KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0 uv run cloudfrog-knowledge jira sync --vault ac
 curl -s "http://127.0.0.1:6366/projects/acme/tasks?limit=5" | jq '.total, [.items[].jira_key]'
 ```
 
-Una segunda corrida da `created: 0`: el upsert es idempotente.
+A second run gives `created: 0`: the upsert is idempotent.
 
-Desde un cliente MCP por stdio, `sync_jira(vault="acme")` hace lo mismo que `--dry-run` y `sync_jira(vault="acme", dry_run=false)` escribe. La tool aparece solo cuando algún vault servido declara `jira`, al final del catálogo.
+From an MCP client over stdio, `sync_jira(vault="acme")` does the same as `--dry-run` and `sync_jira(vault="acme", dry_run=false)` writes. The tool appears only when some served vault declares `jira`, at the end of the catalog.
 
-Con el plugin `knowledge`, el hook de sesión lanza `cloudfrog-knowledge jira sync --auto` en segundo plano cuando `doctor` sale bien: sincroniza cada vault que declara `jira`, tiene sus variables exportadas y ya cumplió su `throttle_minutes`. No bloquea la sesión ni imprime nada. `KNOWLEDGE_JIRA_AUTOSYNC=0` lo apaga.
+With the `knowledge` plugin, the session hook launches `cloudfrog-knowledge jira sync --auto` in the background when `doctor` passes: it syncs every vault that declares `jira`, has its variables exported and has already met its `throttle_minutes`. It does not block the session or print anything. `KNOWLEDGE_JIRA_AUTOSYNC=0` turns it off.
 
-## 5. Desde cuándo
+## 5. Since when
 
-- `--since` (o `since=` en la tool): fecha ISO (`2026-09-01`), fecha y hora (`2026-09-01T12:00:00Z`) o `-Nd` (`-7d`). Gana siempre.
-- Sin él, después de una corrida completa: el cursor menos un día de solape; repetir un issue no cuesta nada.
-- Sin él, después de una corrida truncada: el cursor exacto, sin solape, para que una cola de más de 2.000 issues siempre avance.
-- Sin cursor: 30 días.
+- `--since` (or `since=` in the tool): an ISO date (`2026-09-01`), a date and time (`2026-09-01T12:00:00Z`) or `-Nd` (`-7d`). It always wins.
+- Without it, after a complete run: the cursor minus one day of overlap; repeating an issue costs nothing.
+- Without it, after a truncated run: the exact cursor, with no overlap, so that a tail of more than 2,000 issues always advances.
+- Without a cursor: 30 days.
 
-JQL lee las fechas en la zona horaria de la cuenta de Jira, así que la fecha que va en `jql` está escrita en esa zona (la que responde `GET /rest/api/3/myself`, por ejemplo `2026-10-05 14:45` para las `17:45` UTC en Buenos Aires), mientras `since` y `next_since` quedan en UTC. Si Jira no dice la zona, la fecha se escribe en UTC-12: la consulta empieza antes de lo necesario y nunca después.
+JQL reads dates in the Jira account's time zone, so the date that goes into `jql` is written in that zone (the one `GET /rest/api/3/myself` returns, for example `2026-10-05 14:45` for `17:45` UTC in Buenos Aires), while `since` and `next_since` stay in UTC. If Jira does not report the zone, the date is written in UTC-12: the query starts earlier than necessary and never later.
 
-El cursor (`next_since`) es el `updated` del último issue leído, en UTC, y vive en `jira_sync.json` junto al `index.sqlite` del vault, con `truncated`, `retry`, `synced_at`, `last_attempt_at` y `last_result`. Solo cambia tras una corrida que escribió y en la que Jira y memory respondieron. Una corrida de más de 2.000 issues (o de más de `--max-issues N` en la CLI) termina con `truncated: true` y la siguiente sigue desde su `next_since`; la búsqueda ordena por `updated` y luego por clave, y JQL compara minutos, así que la corrida siguiente vuelve a leer los issues del minuto donde se cortó (el upsert es idempotente). Si todos los issues que cabían en la corrida comparten ese minuto, el cursor no puede avanzar y la corrida responde `E_JIRA_SYNC_STALLED` sin escribir nada.
+The cursor (`next_since`) is the `updated` of the last issue read, in UTC, and lives in `jira_sync.json` next to the vault's `index.sqlite`, with `truncated`, `retry`, `synced_at`, `last_attempt_at` and `last_result`. It changes only after a run that wrote and in which both Jira and memory responded. A run of more than 2,000 issues (or more than `--max-issues N` on the CLI) ends with `truncated: true` and the next one continues from its `next_since`; the search orders by `updated` and then by key, and JQL compares minutes, so the next run re-reads the issues of the minute where it was cut off (the upsert is idempotent). If all the issues that fit in the run share that minute, the cursor cannot advance and the run responds `E_JIRA_SYNC_STALLED` without writing anything.
 
-El cursor nunca deja atrás un issue que no llegó a memory:
+The cursor never leaves behind an issue that did not reach memory:
 
-- Una tarea que memory rechaza por su contenido (`invalid_enum`, `task_key_conflict`) queda en `retry`, y la corrida siguiente también la lee por clave (`GET /rest/api/3/issue/<clave>`); sale de la lista cuando memory la acepta o cuando Jira ya no la tiene (404). La lista guarda hasta 50 claves; si memory rechaza más, el cursor se queda en el `updated` de la más vieja que no cupo.
-- Un `--since` posterior al cursor guardado lee desde ahí pero deja el cursor donde estaba: los issues entre los dos siguen pendientes para la próxima corrida sin `--since`.
+- A task that memory rejects because of its content (`invalid_enum`, `task_key_conflict`) stays in `retry`, and the next run also reads it by key (`GET /rest/api/3/issue/<key>`); it leaves the list when memory accepts it or when Jira no longer has it (404). The list holds up to 50 keys; if memory rejects more, the cursor stays at the `updated` of the oldest one that did not fit.
+- A `--since` later than the stored cursor reads from there but leaves the cursor where it was: the issues between the two remain pending for the next run without `--since`.
 
-## 6. Reporte
+## 6. Report
 
 ```json
 {
@@ -117,22 +117,22 @@ El cursor nunca deja atrás un issue que no llegó a memory:
 }
 ```
 
-`retried` cuenta los issues que la corrida volvió a leer por clave porque memory los rechazó en la última corrida. `skipped.reason` es `invalid_key`, el código propio de memory (`task_key_conflict`: la clave ya es de una tarea de otro proyecto; `invalid_enum`; `missing_field`) o `memory_unavailable`. Si memory deja de responder a mitad de la corrida, las tareas que faltaban quedan en `skipped`, el reporte trae `error` con su código y el cursor no avanza.
+`retried` counts the issues the run re-read by key because memory rejected them in the last run. `skipped.reason` is `invalid_key`, memory's own code (`task_key_conflict`: the key already belongs to a task of another project; `invalid_enum`; `missing_field`) or `memory_unavailable`. If memory stops responding midway through the run, the tasks that were left go into `skipped`, the report carries `error` with its code, and the cursor does not advance.
 
-## 7. Códigos
+## 7. Codes
 
-| Código | Qué hacer |
+| Code | What to do |
 |---|---|
-| `E_FEATURE_DISABLED` | El vault no declara `jira`: añádelo a `features` por PR del vault |
-| `E_MEMORY_PROJECT_MISSING` | El vault no declara `memory.project` |
-| `E_MANIFEST_INVALID` | Falta `site`, `projects` o un nombre de `secrets`, o un valor no cumple la tabla de la sección 1 |
-| `E_SECRET_MISSING` | Las variables que nombra `secrets` están vacías; el mensaje dice cuáles |
-| `E_MEMORY_TOKEN_MISSING` | Una escritura sin `MEMORY_HTTP_TOKEN`: expórtalo, o `KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0` para el memory local sin token |
-| `E_MEMORY_URL_NOT_LOOPBACK` | `KNOWLEDGE_MEMORY_URL` no es `http` en loopback |
-| `E_JIRA_AUTH_FAILED` | Jira rechazó el correo y el token (401 o 403) |
-| `E_JIRA_UNAVAILABLE` | Jira no respondió con issues: un 400 (revisa `projects` y `jql_extra`), un 5xx, más de 10 s, o un 429 repetido |
-| `E_JIRA_SYNC_STALLED` | Todos los issues que caben en la corrida se actualizaron en el minuto donde empieza, y el cursor no puede pasarlo: sube `--max-issues` (hasta 2.000), acota `jql_extra` o pasa un `--since` posterior a ese minuto |
-| `E_ARGUMENT_OUT_OF_RANGE` | `since` no se entiende o está en el futuro |
-| `E_SCOPE_REQUIRED` | La llamada llegó con un bearer sin `admin` |
+| `E_FEATURE_DISABLED` | The vault does not declare `jira`: add it to `features` through a vault PR |
+| `E_MEMORY_PROJECT_MISSING` | The vault does not declare `memory.project` |
+| `E_MANIFEST_INVALID` | `site`, `projects` or a `secrets` name is missing, or a value does not meet the table in section 1 |
+| `E_SECRET_MISSING` | The variables named by `secrets` are empty; the message says which |
+| `E_MEMORY_TOKEN_MISSING` | A write without `MEMORY_HTTP_TOKEN`: export it, or use `KNOWLEDGE_MEMORY_REQUIRE_TOKEN=0` for the local memory without a token |
+| `E_MEMORY_URL_NOT_LOOPBACK` | `KNOWLEDGE_MEMORY_URL` is not `http` on loopback |
+| `E_JIRA_AUTH_FAILED` | Jira rejected the email and token (401 or 403) |
+| `E_JIRA_UNAVAILABLE` | Jira did not respond with issues: a 400 (check `projects` and `jql_extra`), a 5xx, more than 10 s, or a repeated 429 |
+| `E_JIRA_SYNC_STALLED` | All the issues that fit in the run were updated in the minute where it starts, and the cursor cannot get past it: raise `--max-issues` (up to 2,000), narrow `jql_extra` or pass a `--since` later than that minute |
+| `E_ARGUMENT_OUT_OF_RANGE` | `since` is not understood or is in the future |
+| `E_SCOPE_REQUIRED` | The call arrived with a bearer that lacks `admin` |
 
-`jira sync` sale con 0 si manejó todos los issues, 1 con un error de Jira (`E_JIRA_*`) o memory caído a mitad, y 2 si no pudo intentar nada. `--auto` sale siempre con 0, falle lo que falle. Ningún mensaje, reporte ni línea de log lleva el token, el correo ni el cuerpo que respondió Jira o memory.
+`jira sync` exits with 0 if it handled all the issues, 1 with a Jira error (`E_JIRA_*`) or memory going down midway, and 2 if it could not attempt anything. `--auto` always exits with 0, whatever fails. No message, report or log line carries the token, the email or the body that Jira or memory responded with.
