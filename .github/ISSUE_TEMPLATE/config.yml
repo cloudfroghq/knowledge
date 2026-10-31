@@ -2,7 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
     url: https://github.com/cloudfroghq/knowledge/blob/main/SECURITY.md
-    about: Do not open a public issue for vulnerabilities. Follow the private reporting steps in SECURITY.md.
+    about: Do not open a public issue for vulnerabilities. Email admin@cloudfrog.com.mx or follow the private reporting steps in SECURITY.md.
   - name: Installation and usage docs
     url: https://github.com/cloudfroghq/knowledge/blob/main/docs/install.md
     about: Check the installation guide before opening an issue.

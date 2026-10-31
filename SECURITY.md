@@ -17,9 +17,9 @@ The tool contract is versioned separately (currently `2.0.0`, see `docs/contract
 
 Do not open a public issue, pull request or discussion for a vulnerability.
 
-Use GitHub private vulnerability reporting: open the **Security** tab of this repository and choose **Report a vulnerability** (`https://github.com/cloudfroghq/knowledge/security/advisories/new`).
+Email **admin@cloudfrog.com.mx** with the subject `SECURITY: cloudfrog-knowledge`. This is the organization address already published in the package metadata (`plugin/claude-code/.claude-plugin/plugin.json` and `npm/package.json`).
 
-<!-- OWNER: enable "Private vulnerability reporting" in the repository settings (Settings > Code security) so the link above works. -->
+If GitHub private vulnerability reporting is enabled for this repository, you can use it instead: open the **Security** tab and choose **Report a vulnerability** (`https://github.com/cloudfroghq/knowledge/security/advisories/new`). If the button is not there, use the email address above.
 
 Please include:
 
