@@ -106,6 +106,16 @@ The tool catalog and every response shape are a versioned contract (`CONTRACT_VE
 
 Four contracts: `layers` (a full top-to-bottom order; a level never imports upward or across siblings), `core-isolated` (core imports neither ext nor http), `ext-below-http` (ext does not import http) and `core-no-transport` (core does not import `mcp`, `starlette` or `uvicorn`). `tests/test_dynamic_imports.py` forbids `importlib` in core and `import_module` outside `server`, which is the only module that loads extensions. `repos` is ext but sits at the bottom of the order because it imports nothing internal and runs as `python3 -m knowledge.repos` without the virtual environment. Check with `uv run lint-imports`.
 
+## Architecture diagram
+
+[`docs/architecture.md`](docs/architecture.md) and the README show the same diagram twice: inline as Mermaid, which GitHub renders, and as [`docs/architecture.png`](docs/architecture.png), which also renders where Mermaid does not (PyPI, mirrors, offline viewers). Its source is [`docs/architecture.mmd`](docs/architecture.mmd). If you change the diagram, edit that file, copy it into the Mermaid blocks of `README.md` and `docs/architecture.md`, and regenerate the PNG:
+
+```bash
+npx -y @mermaid-js/mermaid-cli -i docs/architecture.mmd -o docs/architecture.png -b white -s 2
+```
+
+mermaid-cli drives a headless Chromium through puppeteer. Where puppeteer cannot download its own browser, point it at one you have with `-p puppeteer.json`, a file such as `{"executablePath": "/path/to/chromium", "args": ["--no-sandbox"]}` kept outside the repository.
+
 ## The write fence
 
 The server never writes inside a vault outside `90 - Memory/` ([ADR-044](docs/adr/ADR-044.md)). `sync_confluence(dry_run=False)` answers `E_WRITE_FENCED` without reading credentials; `confluence export` and `vault-lint --fix --out` write only outside every served vault; `init` never writes inside a vault. `tests/test_write_fence.py` calls every tool and the export over a copy of the fixture and requires the tree to stay intact. `include_memories=false` is the default of `context_pack`: the fence is tested, not assumed. A change that adds a write path must keep that test green.

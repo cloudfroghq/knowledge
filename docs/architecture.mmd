@@ -1,21 +1,38 @@
-graph TD
-    CC["Claude Code (MCP Client)<br/>HTTP + Bearer auth"]
-    CC -->|"https /mcp"| PROXY["Reverse proxy (TLS)"]
-    PROXY --> SERVER
+%%{init: {"flowchart": {"wrappingWidth": 300}}}%%
+flowchart TB
+    LOCAL["One person: Claude Code or any MCP client, over stdio"]
+    TEAM["A team: MCP clients over HTTP with a bearer"]
+    REPO["Vault git repository"]
 
-    subgraph CONTAINER["knowledge-mcp container"]
-        SERVER["server.py<br/>FastMCP streamable-http"]
-        SERVER --> AUTH["auth.py<br/>Bearer + HMAC middleware"]
-        SERVER --> WEBHOOK["webhook.py<br/>/webhook/reindex"]
-        SERVER --> CONFIG["config.py<br/>config.json + env"]
-        SERVER --> INDEXER["indexer.py<br/>chunks + embeddings"]
-        SERVER --> GRAPH["graph.py<br/>wiki-link graph"]
+    subgraph PROCESS["cloudfrog-knowledge: one process, three layers"]
+        subgraph HTTP["http"]
+            AUTH["auth: bearer to principal<br/>scopes read / admin"]
+            TRANSPORT["server: FastMCP over stdio or HTTP /mcp<br/>10 core tools + extension tools by features"]
+        end
+        subgraph CORE["core (no HTTP, no MCP)"]
+            REGISTRY["VaultRegistry: one runtime per vault<br/>from vaults.yaml or VAULT_PATH"]
+            INDEXER["indexer: frontmatter, chunks by ## section<br/>wiki-link graph, SHA-256 change detection"]
+            INDEX[("index.sqlite per vault<br/>FTS5 BM25 + sqlite-vec KNN")]
+        end
+        subgraph EXT["ext (optional integrations)"]
+            WEBHOOK["webhook: /health, /webhook/reindex<br/>HMAC signature or admin bearer"]
+            GITSYNC["gitsync: fetch, then fast-forward or realign"]
+            JUDGE["judges: optional rerank judge, jev or kev"]
+            MEMHTTP["memory_http: read-only memory client"]
+        end
     end
 
-    INDEXER --> INDEX[("index.sqlite<br/>FTS5 + sqlite-vec<br/>/data/index/&lt;slug&gt;")]
-    INDEXER --> OPENAI["OpenAI API<br/>text-embedding-3-large"]
-    GRAPH --> LINKGRAPH[("link_graph.json")]
+    VAULT[("Vault directory: Markdown + vault.yaml<br/>write fence: nothing outside 90 - Memory/")]
+    EMBED["Embeddings provider<br/>openai, none or bag-of-words"]
+    RERANK["Judge service"]
+    MEMORY["Local memory server, loopback"]
 
-    GH["GitHub repo<br/>(vault privado)"] -->|webhook push| WEBHOOK
-    WEBHOOK -->|git pull| VAULT[("/data/vault-repo")]
-    INDEXER -.->|parse + embed| VAULT
+    LOCAL -->|stdio| TRANSPORT
+    TEAM -->|"HTTPS /mcp"| AUTH --> TRANSPORT
+    TRANSPORT --> REGISTRY --> INDEXER --> INDEX
+    INDEXER -->|reads| VAULT
+    INDEXER --> EMBED
+    TRANSPORT -->|"search(rerank)"| JUDGE --> RERANK
+    TRANSPORT -->|"context_pack(include_memories)"| MEMHTTP --> MEMORY
+    REPO -->|push| WEBHOOK --> GITSYNC -->|pull| VAULT
+    WEBHOOK -.->|incremental reindex| REGISTRY
