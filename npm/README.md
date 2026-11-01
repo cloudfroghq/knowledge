@@ -37,7 +37,7 @@ Pin the version (`X.Y.Z`, this package's version) so that every start runs the s
 }
 ```
 
-The server needs a vault: `VAULT_PATH`, `KNOWLEDGE_VAULTS` (a `vaults.yaml`) or `~/.config/knowledge/vaults.yaml`. With the default `openai` embeddings provider it also needs `OPENAI_API_KEY`; `KNOWLEDGE_EMBEDDINGS_PROVIDER=none` runs lexical search without a key. See the [configuration reference](https://github.com/cloudfroghq/knowledge#configuration).
+The server needs a vault: `VAULT_PATH`, `KNOWLEDGE_VAULTS` (a `vaults.yaml`) or `~/.config/knowledge/vaults.yaml`. With the default `openai` embeddings provider it also needs `OPENAI_API_KEY`; `KNOWLEDGE_EMBEDDINGS_PROVIDER=none` runs lexical search without a key. See the [configuration reference](https://github.com/cloudfroghq/knowledge/blob/main/docs/configuration.md).
 
 The first start downloads `uv`, a `uv`-managed CPython 3.12 (if there is none) and the package's dependencies: it can take longer than the 30 s an MCP client waits by default. Run it once by hand (`npx @cloudfrog/knowledge@X.Y.Z doctor`) to warm the cache. The wrapper never writes to stdout: everything it prints before the CLI starts goes to stderr, so an MCP client talks to the server directly.
 
