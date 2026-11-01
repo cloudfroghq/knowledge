@@ -72,7 +72,38 @@ The gates have their own battery: it breaks each one on purpose and requires the
 
 It always works on temporary copies and never modifies your tree. Run it every time you change a gate: a gate nobody has seen fail is a promise, not a gate.
 
-What each CI job does and why, Semgrep caveats and the release workflows are described in the README, [Tests and merge gates (ring 1)](README.md#tests-and-merge-gates-ring-1); operating CI (required checks, bypass, rollback) is in [`docs/runbooks/ci-ring1.md`](docs/runbooks/ci-ring1.md).
+What each CI job does and why, and the Semgrep caveats, are in [What CI runs](#what-ci-runs); operating CI (required checks, bypass, rollback, releases) is in [`docs/runbooks/ci-ring1.md`](docs/runbooks/ci-ring1.md).
+
+## What CI runs
+
+The suite never touches a real vault or the OpenAI API: it runs a real `SQLiteStore` in a temporary directory against the versioned fixtures, and embeds with the deterministic `bag-of-words` provider, which `tests/conftest.py` selects with `KNOWLEDGE_EMBEDDINGS_PROVIDER=bag-of-words`; nothing is patched. That is why no `OPENAI_API_KEY` is needed, and none must be added as a repository variable.
+
+`.github/workflows/ring1.yml` is the ring 1 gate. It runs on Linux (`ubuntu-latest`) with three triggers:
+
+| Event | Jobs |
+|---|---|
+| `pull_request` to `main` | lint and suite with coverage (plus the npm package's `node --test`, in the same job), import-linter, gitleaks over the PR's commits, Semgrep CE and patch coverage |
+| `push` to `main` | the same except patch coverage (the diff against `origin/main` is empty), plus the Docker image built and tested on amd64 |
+| `workflow_dispatch` | the same as on `push`, on the branch you choose: `gh workflow run ring1.yml --ref <branch>` |
+
+The patch-coverage threshold lives in `pyproject.toml`, not in the YAML, so that the gate and your machine cannot disagree. The image does not run on pull requests: it is the slowest job, and a broken image shows up on the `push` to `main` and on any manual dispatch of the branch. There is no path filter: a required check that does not run leaves the PR waiting forever.
+
+The `protect-main` ruleset requires on every PR the five checks that run on a `pull_request` (all but the image). Bypass, Actions minutes, rotating a read-only deploy key and rollback: [`docs/runbooks/ci-ring1.md`](docs/runbooks/ci-ring1.md).
+
+The workflow has `permissions: contents: read`, reads no secret and pins each action by SHA with its tag in a comment; the repository admits only GitHub actions and requires the SHA pin. `tests/test_pipeline_contract.py` pins all of that: triggers, which jobs run on a PR, pins, permissions, and that ring 1 names no secret.
+
+The weekly stale-documents report does not run here: each vault runs it in its own workflow, which fetches `scripts/weekly-stale-report.py` and `scripts/notify-stale-report.sh` from this repository, pinned by commit or tag. It is never a gate and never writes in the vault.
+
+Two more workflows verify and publish a release, and neither is a pull request gate. `.github/workflows/release-check.yml` runs on every pushed `v*` tag and by hand, reads no secrets or environments, and checks that the five versions agree, that the frozen goldens hold, that the plugin validates with `claude plugin validate --strict` and that the sdist and the wheel carry only the package. `.github/workflows/publish.yml` verifies again and publishes the tag to PyPI and npm by trusted publishing. What each one checks, in order, and how to operate them: [`docs/runbooks/ci-ring1.md`](docs/runbooks/ci-ring1.md), sections 6 and 7.
+
+Two things to read carefully before trusting a green run:
+
+- **Semgrep's zero does not mean "nothing to report".** One rule (`dynamic-urllib-use-detected`, on the Confluence client) still fires and is silenced with an audited comment. What removes the risk is the scheme allowlist of `confluence_sync._api_get`, pinned by its own tests. Every suppression in the code is declared in `tests/test_suppressions.py` with its reason and the test that backs it; a new undeclared one breaks the suite.
+- **Semgrep scans only files tracked by git.** In a workflow run that is the whole tree; on your machine, with unadded work, it is not, and the count of scanned files will be lower.
+
+The gates have their own canary battery, which breaks each gate on purpose and requires the exact failure; see [Gate canaries](#gate-canaries).
+
+Performance is fenced in the suite by deterministic work counts (SQL statements and rows, files opened, YAML parses; never a clock) in `tests/test_perf_budgets.py` and `tests/test_perf_budget_*.py`. Wall-clock numbers come from the `benchmarks/` harness (`uv run python -m benchmarks run`, then `compare`), which is not a gate; how to run it against a base commit, the result schema and the proposed SLOs are in [`docs/performance/benchmarks.md`](docs/performance/benchmarks.md), and the before/after results of the phase 0 and 1 work are in [Performance](docs/performance/results-phase-0-1.md).
 
 ## Testing rules
 
@@ -106,6 +137,16 @@ The tool catalog and every response shape are a versioned contract (`CONTRACT_VE
 
 Four contracts: `layers` (a full top-to-bottom order; a level never imports upward or across siblings), `core-isolated` (core imports neither ext nor http), `ext-below-http` (ext does not import http) and `core-no-transport` (core does not import `mcp`, `starlette` or `uvicorn`). `tests/test_dynamic_imports.py` forbids `importlib` in core and `import_module` outside `server`, which is the only module that loads extensions. `repos` is ext but sits at the bottom of the order because it imports nothing internal and runs as `python3 -m knowledge.repos` without the virtual environment. Check with `uv run lint-imports`.
 
+## Architecture diagram
+
+[`docs/architecture.md`](docs/architecture.md) and the README show the same diagram twice: inline as Mermaid, which GitHub renders, and as [`docs/architecture.png`](docs/architecture.png), which also renders where Mermaid does not (PyPI, mirrors, offline viewers). Its source is [`docs/architecture.mmd`](docs/architecture.mmd). If you change the diagram, edit that file, copy it into the Mermaid blocks of `README.md` and `docs/architecture.md`, and regenerate the PNG:
+
+```bash
+npx -y @mermaid-js/mermaid-cli -i docs/architecture.mmd -o docs/architecture.png -b white -s 2
+```
+
+mermaid-cli drives a headless Chromium through puppeteer. Where puppeteer cannot download its own browser, point it at one you have with `-p puppeteer.json`, a file such as `{"executablePath": "/path/to/chromium", "args": ["--no-sandbox"]}` kept outside the repository.
+
 ## The write fence
 
 The server never writes inside a vault outside `90 - Memory/` ([ADR-044](docs/adr/ADR-044.md)). `sync_confluence(dry_run=False)` answers `E_WRITE_FENCED` without reading credentials; `confluence export` and `vault-lint --fix --out` write only outside every served vault; `init` never writes inside a vault. `tests/test_write_fence.py` calls every tool and the export over a copy of the fixture and requires the tree to stay intact. `include_memories=false` is the default of `context_pack`: the fence is tested, not assumed. A change that adds a write path must keep that test green.
@@ -134,7 +175,7 @@ The server never writes inside a vault outside `90 - Memory/` ([ADR-044](docs/ad
 Maintainers cut releases; a contributor's PR never bumps the version.
 
 - The version is the same on PyPI, npm and the git tag ([ADR-050](docs/adr/ADR-050.md)).
-- `scripts/bump-version.sh X.Y.Z` writes it into `pyproject.toml`, `plugin/claude-code/.claude-plugin/plugin.json`, the `@vX.Y.Z` ref in `plugin/claude-code/.mcp.json` and `npm/package.json`, refreshes `uv.lock` and runs `scripts/check-version.sh`. It never commits or tags; the tag `vX.Y.Z` is cut on the merge of the release pull request.
+- `scripts/bump-version.sh X.Y.Z` writes it into `pyproject.toml`, `plugin/claude-code/.claude-plugin/plugin.json`, the `cloudfrog-knowledge==X.Y.Z` package source in `plugin/claude-code/.mcp.json` (the plugin launches the PyPI release) and `npm/package.json`, refreshes `uv.lock` and runs `scripts/check-version.sh`. It never commits or tags; the tag `vX.Y.Z` is cut on the merge of the release pull request.
 - On the tag, `.github/workflows/release-check.yml` verifies versions, frozen goldens, the plugin (`claude plugin validate --strict`), the sdist and the wheel; its green run is expected before the marketplace pull request (`cloudfroghq/claude-plugins`).
 - `.github/workflows/publish.yml` verifies again and publishes to PyPI and npm by trusted publishing, skipping a registry only if that exact version already exists.
 - The release history is in [`CHANGELOG.md`](CHANGELOG.md). Operating releases, the first manual npm publish and the trusted-publisher setup are in [`docs/runbooks/ci-ring1.md`](docs/runbooks/ci-ring1.md), section 7.

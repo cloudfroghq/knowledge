@@ -136,7 +136,7 @@ Rollback: restore the compose's previous environment, revert the compose change 
 
 #### Reading per-tool calls
 
-The server counts each call by tool, client and principal in the index's `usage_stats.json` (`/data/index/<slug>`, `knowledge-index` volume); the format is in the README, section "Call telemetry" ([`README.md`](../../README.md)). To read it, open the `knowledge-mcp` service's terminal on your platform (or `docker exec -it <container> sh` on the host) and run `doctor`, which only reads:
+The server counts each call by tool, client and principal in the index's `usage_stats.json` (`/data/index/<slug>`, `knowledge-index` volume); the format is in [Call telemetry](../operations.md#call-telemetry). To read it, open the `knowledge-mcp` service's terminal on your platform (or `docker exec -it <container> sh` on the host) and run `doctor`, which only reads:
 
 ```bash
 python -m knowledge doctor | python3 -c 'import json,sys; v=[r for r in json.load(sys.stdin)["vaults"] if r["default"]][0]; print(json.dumps(v["tool_calls"], indent=1))'

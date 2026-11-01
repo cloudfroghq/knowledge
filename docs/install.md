@@ -50,13 +50,13 @@ export CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1 && claude plugin marketplace add cloudf
 
   The repository is public: `gh release download` does not require logging in, and `curl -LO` against the same URLs also works.
 - Afterwards, inside Claude Code: `/plugin` → `Installed` → `knowledge-remote` → `Configure`, with the URL `https://<deployment>/mcp` and your personal bearer. Outside the session: `claude plugin configure knowledge-remote@cloudfroghq --values-stdin < values.json`. Do not use `claude plugin install … --config` for the bearer: it ends up in your shell history. Restart Claude Code to apply it.
-- Without the plugin, the same server is registered by hand: `claude mcp add -s user -t http knowledge https://<deployment>/mcp -H 'Authorization: Bearer <bearer>'`.
+- Without the plugin, the same server is registered by hand: `claude mcp add -s user -t http cloudfrog-knowledge https://<deployment>/mcp -H 'Authorization: Bearer <bearer>'`.
 
 Check: `curl -s https://<deployment>/health` responds `status: ok` with `contract_version`, and `/mcp` inside Claude Code shows `plugin:knowledge-remote:knowledge` and `plugin:memory:memory` connected.
 
 ## Install the CLI
 
-`init`, `doctor`, `vault-lint` and the rest of the subcommands run from your terminal. The same package is published through three channels, always with the same version:
+`init`, `doctor`, `vault-lint` and the rest of the subcommands run from your terminal. The same package is published through three channels, always with the same version ([ADR-050](adr/ADR-050.md)):
 
 | Channel | Install once | Run without installing |
 |---|---|---|
@@ -64,12 +64,14 @@ Check: `curl -s https://<deployment>/health` responds `status: ok` with `contrac
 | npm (`@cloudfrog/knowledge`) | `npm install -g @cloudfrog/knowledge` | `npx @cloudfrog/knowledge <subcommand>` or `pnpm dlx @cloudfrog/knowledge <subcommand>` |
 | Git tag | `uv tool install --managed-python --python 3.12 git+https://github.com/cloudfroghq/knowledge.git@vX.Y.Z` | `uvx --managed-python --python 3.12 --from git+https://github.com/cloudfroghq/knowledge.git@vX.Y.Z cloudfrog-knowledge <subcommand>` |
 
-- Each installation leaves two commands that are the same program: `knowledge` and `cloudfrog-knowledge`. The usage (`--help`), `--version` and the hints of `doctor` and `init` name the one you ran; `KNOWLEDGE_COMMAND_LABEL` still takes precedence over both (see the [README](../README.md), "Command label in hints").
+- Each installation leaves two commands that are the same program: `knowledge` and `cloudfrog-knowledge`. The usage (`--help`), `--version` and the hints of `doctor` and `init` name the one you ran; `KNOWLEDGE_COMMAND_LABEL` still takes precedence over both (see [Command label in hints](cli.md#command-label-in-hints)).
 - `--managed-python --python 3.12`: the package declares `requires-python >=3.12,<3.13`, but `uv` ignores the upper bound when choosing an interpreter and, without `--python`, would use the first newer Python it finds. The `uv`-managed CPython also loads `sqlite-vec` (see Prerequisites).
 - The npm package ships no Python: on the first run it downloads `uv` 0.10.4 from its GitHub release, checks its SHA-256 against the checksum bundled inside the package, stores it in `~/.cache/cloudfrog-knowledge/uv/` (`%LOCALAPPDATA%` on Windows) and runs `uv tool run --managed-python --python 3.12 --from cloudfrog-knowledge==<version> <command>`. It works on macOS (arm64, x64), Linux (x64, arm64; glibc or musl) and Windows (x64, arm64). Behind a proxy that Node does not traverse, point `CLOUDFROG_KNOWLEDGE_UV` at a `uv` you already have. A package failure before the CLI starts prints `<code>: <message>` on stderr and exits with 2.
 - Pin the version when you use it from a script or an `.mcp.json`: `cloudfrog-knowledge==X.Y.Z` (or `uvx … cloudfrog-knowledge@X.Y.Z`), `npx @cloudfrog/knowledge@X.Y.Z` or the tag `@vX.Y.Z`. Throughout this guide `vX.Y.Z` / `X.Y.Z` is a release version: take the latest one from the [releases](https://github.com/cloudfroghq/knowledge/releases) (the docs do not track `scripts/bump-version.sh`).
 
 Check: `knowledge --version` (or `npx @cloudfrog/knowledge --version`) prints `knowledge X.Y.Z`; `knowledge doctor` diagnoses the installation with your vaults.
+
+Every subcommand, its flags and its exit codes are in the [CLI reference](cli.md). To serve HTTP from a container instead, the `Dockerfile` and the generic Compose file are described in [Docker image](operations.md#docker-image).
 
 ## Initialize the client
 
@@ -78,6 +80,8 @@ A vault that declares `Contexts/config.json` ships the context package of each a
 ```bash
 cloudfrog-knowledge init --dry-run --repo <id> && cloudfrog-knowledge init --repo <id>
 ```
+
+What each checkout is, where it is on this machine and the precedence between the two are described in [Repository registry](repository-registry.md).
 
 Each machine chooses in which checkouts it installs a package: the `apply` list of its `repos.local.json`, with the registry's identifiers (`Contexts/config.json`). The registry is the same for everyone; the selection is yours.
 
@@ -108,11 +112,11 @@ Check: `cloudfrog-knowledge doctor --brief` stops saying `init pending for vault
 
 On a machine that consumes a remote server (no index, no embeddings key, no bearers of its own), `cloudfrog-knowledge doctor --client` checks only what is yours: that the vault exists and can be read, that its `Contexts/config.json` loads, your `repos.local.json` and the state of each checkout (`init --dry-run`, without scanning or prompting). A present checkout you did not select is `not-selected` (information, not a problem); a selected one without its package counts as `init` pending (code 0); one with links to its package that is not in `apply` is the warning `W_CONTEXTS_LINKED_NOT_SELECTED` (code 0: add it with `--repo ID` or remove its links with `--drop ID`), and a `repos.local.json` without `apply` is the warning `W_CONTEXTS_SELECTION_MISSING` (code 0: the next `init` creates it). A checkout that is a git repository without an `origin` remote is a warning (`W_CONTEXTS_CHECKOUT_UNVERIFIED`, code 0); a conflict (`E_CONTEXTS_CONFLICT`) or a checkout that is not the declared one (`E_CONTEXTS_CHECKOUT_INVALID`) exits with 1. `--brief` works the same.
 
-A vault that wraps `init` and `doctor` in its own scripts (for example `Contexts/scripts/init.sh` and `Contexts/scripts/doctor.sh`, which pin the package version and the vault) sets `KNOWLEDGE_COMMAND_LABEL='Contexts/scripts/{command}.sh'` in them: the hints of `init` and `doctor` then name those scripts and not this CLI. See the [README](../README.md), "Command label in hints".
+A vault that wraps `init` and `doctor` in its own scripts (for example `Contexts/scripts/init.sh` and `Contexts/scripts/doctor.sh`, which pin the package version and the vault) sets `KNOWLEDGE_COMMAND_LABEL='Contexts/scripts/{command}.sh'` in them: the hints of `init` and `doctor` then name those scripts and not this CLI. See [Command label in hints](cli.md#command-label-in-hints).
 
 ## Bearers and scopes of an HTTP deployment
 
-Each bearer of an HTTP deployment has scopes: `read` uses the server and `admin` can also call `reindex`, `sync_confluence` and `POST /webhook/reindex` with a manual bearer. A bearer without `admin` receives `E_SCOPE_REQUIRED` on those tools (403 on the webhook); the others respond the same. Over stdio there are no bearers and nothing is checked.
+Each bearer of an HTTP deployment has scopes: `read` uses the server and `admin` can also call `reindex`, `sync_confluence` and `POST /webhook/reindex` with a manual bearer. A bearer without `admin` receives `E_SCOPE_REQUIRED` on those tools (403 on the webhook); the others respond the same. Every token is compared against every entry in constant time. Over stdio there are no bearers and nothing is checked.
 
 | Variable or key | What it does |
 |---|---|

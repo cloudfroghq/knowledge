@@ -1,7 +1,8 @@
 [project]
 name = "cloudfrog-knowledge"
 version = "0.9.0"
-description = "MCP server providing semantic search over an Obsidian documentation vault"
+description = "Knowledge server: semantic search, section reading and link graph over curated documentation vaults"
+readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
@@ -16,6 +17,13 @@ dependencies = [
     # Pinned exactly: the on-disk virtual table format is the extension's own.
     "sqlite-vec==0.1.9",
 ]
+
+[project.urls]
+Homepage = "https://github.com/cloudfroghq/knowledge"
+Repository = "https://github.com/cloudfroghq/knowledge"
+Documentation = "https://github.com/cloudfroghq/knowledge/tree/main/docs"
+Changelog = "https://github.com/cloudfroghq/knowledge/blob/main/CHANGELOG.md"
+Issues = "https://github.com/cloudfroghq/knowledge/issues"
 
 [project.scripts]
 cloudfrog-knowledge = "knowledge.cli:main"

@@ -19,7 +19,7 @@ Proposed SLOs for a 5,000-document vault on the reference runner (in-process too
 
 ## Status of Phases 0 and 1
 
-Every delivered item is category **A**: the frozen goldens (`tests/golden/v2.0.0/`, all six sessions) and `docs/tools/inventory.md` are unchanged, and the contract stays at 2.0.0. Commits are those of the `perf/phase-0-1` branch. Counts are exact (the work-budget tests); times come from the `benchmarks/` harness, base `a89cd5e` against the branch tip on the same 4 vCPU VM and the same interpreter (CPython 3.12.3, SQLite 3.45.1, `sqlite-vec` 0.1.9), bag-of-words, generated vaults of 500 and 5,000 documents (seed 7; 1,370 and 14,364 chunks), 200 calls per scenario. Wall clock on this VM is good to about 10–15 %.
+Every delivered item is category **A**: the frozen goldens (`tests/golden/v2.0.0/`, all six sessions) and `docs/tools/inventory.md` are unchanged, and the contract stays at 2.0.0. Commits are those of the `perf/phase-0-1` branch. Counts are exact (the work-budget tests); times come from the `benchmarks/` harness, base `a89cd5e` against the branch tip on the same 4 vCPU VM and the same interpreter (CPython 3.12.3, SQLite 3.45.1, `sqlite-vec` 0.1.9), bag-of-words, generated vaults of 500 and 5,000 documents (seed 7; 1,370 and 14,364 chunks), 200 calls per scenario. Wall clock on this VM is good to about 10–15 %. The full before/after tables, with the trade-offs, are in [`results-phase-0-1.md`](results-phase-0-1.md).
 
 | # | Status | Commits | Measured result |
 |---|---|---|---|
