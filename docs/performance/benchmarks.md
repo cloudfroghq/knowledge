@@ -11,6 +11,8 @@ Wall clock on a shared runner is good to about 10-15 %, so it never gates a merg
 
 Everything uses synthetic vaults (`tests/synthetic_vault.py`) in a temporary directory and the `bag-of-words` embedding provider. No real vault, no network, no API key.
 
+The measured results of the phase 0 and 1 work, before and after, are in [`results-phase-0-1.md`](results-phase-0-1.md).
+
 ## Quick start
 
 ```bash
