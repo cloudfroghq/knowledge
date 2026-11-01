@@ -1,5 +1,21 @@
 # Scripts
 
+## Overview
+
+| Script | Description |
+|---|---|
+| `scripts/setup.sh` | Local setup: dependencies, `.env` and `migrate-index` (prepares the index without embedding; it fills on the first tool call). |
+| `scripts/weekly-memory-bridge.sh` | Weekly bridge (launchd): exports memories from memory to `90 - Memory/`, replicates them to the cloud, and commits and pushes that folder in the vault's repository; the push webhook reindexes the server. `BRIDGE_DRY_RUN=1` rehearses without committing. |
+| `scripts/weekly-stale-report.py` | Stale-documents report grouped by owner. No index and no OpenAI: it runs in CI. Honors the `index.exclude` of the `vault.yaml` of the vault it checks. |
+| `scripts/notify-stale-report.sh` | Posts that report to the webhook in `STALE_REPORT_WEBHOOK_URL`. Exit `3` if a binary is missing: it never disguises that as a network failure. |
+| `scripts/tests/notify-stale-report-canaries.sh` | Canary battery for the notification. Pins the four exit codes with exact equality. |
+| `scripts/tests/ring1-gates-canaries.sh` | Canary battery for the ring 1 gates. Breaks each one on purpose and requires the exact failure. `--with-semgrep` adds the cases that use the pinned image. |
+| `scripts/ci-install-uv.sh DIR` | Installs into `DIR` the `uv` pinned by `npm/lib/uv-release.json`, from its GitHub release and verified by SHA-256; `publish.yml` uses it. |
+| `scripts/bump-version.sh X.Y.Z` / `scripts/check-version.sh [vX.Y.Z]` | Move and check the version in `pyproject.toml`, `plugin.json`, `.mcp.json`, `npm/package.json` and `uv.lock`. |
+| `npm/scripts/uv-release.js <version>\|--check\|--smoke` | Regenerates the `uv` SHA-256 checksums the npm package carries from the release's `.sha256` files, compares them with the release, or installs `uv` with the package's code and runs `uv --version`. |
+
+These scripts are for local stdio mode. On a server the index lives in the `knowledge-index` volume and is maintained through the webhook; there is no snapshot to export or import, because the index is rebuilt from the vault. The sections below describe them in detail.
+
 ## setup.sh -- First-Time Setup
 
 Installs dependencies, creates `.env` and runs `cloudfrog-knowledge migrate-index`, which prepares the vault's `index.sqlite` without embedding anything. The index rebuilds from the vault on the first tool call; there is no snapshot to download or upload.
@@ -167,7 +183,7 @@ file in this one.
 The `launchd` agents remain responsible for the Confluence sync and for the
 memory bridge, which are not part of the weekly review. The server's index has
 no local agent: it is reindexed when the GitHub push webhook notifies it (see
-"Vault sync" in the main README), and the memory bridge goes in through that same
+[Vault sync](../docs/operations.md#vault-sync)), and the memory bridge goes in through that same
 door because it ends with a push.
 
 ## weekly-memory-bridge.sh — Memory → vault bridge (weekly launchd)
@@ -416,7 +432,7 @@ uv run pytest tests/test_promotion_bridge.py -q
 
 ## bump-version.sh / check-version.sh -- Package and plugin version
 
-`bump-version.sh X.Y.Z` writes the same number into `version` of `pyproject.toml`, into `version` of `plugin/claude-code/.claude-plugin/plugin.json` and into the `@vX.Y.Z` of the package source in `plugin/claude-code/.mcp.json` and into `version` of `npm/package.json`, regenerates `uv.lock` with `uv lock` (`--no-lock` skips it) and ends with `check-version.sh`. It neither commits nor cuts the tag: the tag is created on the merge of the release pull request.
+`bump-version.sh X.Y.Z` writes the same number into `version` of `pyproject.toml`, into `version` of `plugin/claude-code/.claude-plugin/plugin.json` and into the `cloudfrog-knowledge==X.Y.Z` package source in `plugin/claude-code/.mcp.json` (the plugin launches that PyPI release) and into `version` of `npm/package.json`, regenerates `uv.lock` with `uv lock` (`--no-lock` skips it) and ends with `check-version.sh`. It neither commits nor cuts the tag: the tag is created on the merge of the release pull request.
 
 `check-version.sh [vX.Y.Z]` compares those four values and the project version in `uv.lock`; also the tag, if it is passed as an argument or if `HEAD` has a `v*` one. Read-only. It exits with 0 if everything matches, 1 if something differs and 2 on a usage error.
 
@@ -426,3 +442,29 @@ scripts/check-version.sh vX.Y.Z
 ```
 
 `.github/workflows/release-check.yml` runs it on every `v*` tag: with the tag name when the ref is a tag and with no argument when dispatched from a branch, because a branch name is not a tag and the script rejects it with 2.
+
+## ci-install-uv.sh -- Pinned and verified uv for CI
+
+Installs into `DIR` the `uv` release pinned by `npm/lib/uv-release.json`: it downloads this machine's archive from the GitHub release, refuses it when its SHA-256 differs from the pinned one, extracts `uv` and `uvx` into `DIR` and, inside a GitHub Actions job, appends `DIR` to `$GITHUB_PATH`. `.github/workflows/publish.yml` uses it, because the installer script ring 1 runs downloads the same archive without checking any hash. Exit status: 0 installed, 1 on a download or hash failure, 2 on a usage error or an unsupported runner.
+
+```bash
+scripts/ci-install-uv.sh "$HOME/.local/uv-ci"
+```
+
+## tests/ring1-gates-canaries.sh -- Canary battery for the ring 1 gates
+
+Breaks each ring 1 gate on purpose and requires the exact failure, exit code included; the cases that must pass leave the tree alone and require a pass. It works on temporary copies and never touches your tree. Written for the bash 3.2 that macOS ships. `--with-semgrep` adds the cases that run the pinned Semgrep image, so it needs Docker. Run it every time you change a gate (see [CONTRIBUTING.md](../CONTRIBUTING.md#gate-canaries)).
+
+```bash
+/bin/bash scripts/tests/ring1-gates-canaries.sh
+/bin/bash scripts/tests/ring1-gates-canaries.sh --with-semgrep
+```
+
+## npm/scripts/uv-release.js -- uv checksums of the npm package
+
+Lives in `npm/scripts/`, outside the published npm package. It maintains `npm/lib/uv-release.json`, the `uv` version the npm wrapper runs and the SHA-256 of each release archive it may download; the wrapper never fetches a checksum at run time. `<version>` regenerates the file from the release's `.sha256` files, `--check` compares the committed file with them (exit 1 on drift) and `--smoke` installs this platform's archive into a temporary cache through the wrapper's own code and runs `uv --version`. `--check` and `--smoke` need the network and leave the package tree untouched; `publish.yml` runs both.
+
+```bash
+(cd npm && node scripts/uv-release.js --check)
+(cd npm && node scripts/uv-release.js --smoke)
+```
