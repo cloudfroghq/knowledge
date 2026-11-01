@@ -26,6 +26,11 @@ RUN uv sync --frozen --no-dev --no-install-project
 # same path in both stages, so the script's shebang (/app/.venv/bin/python)
 # resolves in the runtime stage. PYTHONPATH=/app/src there still puts the copied
 # source ahead of site-packages: the code imported is the same as before.
+#
+# pyproject.toml declares readme = "README.md", which hatchling reads while it
+# builds the wheel, so the file has to be in the builder's context. It stays out
+# of the dependency-only layer above: editing it must not invalidate that cache.
+COPY README.md ./
 COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 

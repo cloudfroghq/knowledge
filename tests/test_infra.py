@@ -12,7 +12,9 @@ import shutil
 import stat
 import subprocess
 import sys
-from pathlib import Path
+import tomllib
+from fnmatch import fnmatch
+from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any
 
@@ -62,6 +64,70 @@ def test_dockerfile_installs_the_project_so_the_cli_is_on_path() -> None:
     assert "COPY --from=builder /app/.venv /app/.venv" in runtime
     assert re.search(r"^\s*PATH=/app/\.venv/bin:\$PATH\b", runtime, re.MULTILINE)
     assert 'cloudfrog-knowledge = "knowledge.cli:main"' in (ROOT / "pyproject.toml").read_text()
+
+
+def _builder_copies_before_project_install() -> list[str]:
+    """Sources of every ``COPY`` in the builder stage that precedes ``uv sync … --no-editable``."""
+    text = (ROOT / "Dockerfile").read_text()
+    builder = text.split(" AS runtime", 1)[0]
+    install = re.search(r"^RUN uv sync\b.*--no-editable\b.*$", builder, re.MULTILINE)
+    assert install is not None, "the builder installs the project non-editable"
+    sources: list[str] = []
+    for line in builder[: install.start()].replace("\\\n", " ").splitlines():
+        words = line.split()
+        if not words or words[0].upper() != "COPY":
+            continue
+        args = [w for w in words[1:] if not w.startswith("--")]
+        sources.extend(args[:-1])
+    return sources
+
+
+def _dockerignored(path: str) -> bool:
+    """Whether ``.dockerignore`` leaves ``path`` out of the build context (last matching line wins)."""
+    ignored = False
+    for raw in (ROOT / ".dockerignore").read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        negated = line.startswith("!")
+        pattern = line.lstrip("!").strip("/")
+        parts = PurePosixPath(path).parts
+        prefixes = ["/".join(parts[: i + 1]) for i in range(len(parts))]
+        if any(fnmatch(prefix, pattern) or fnmatch(parts[i], pattern) for i, prefix in enumerate(prefixes)):
+            ignored = not negated
+    return ignored
+
+
+def _files_the_package_build_needs() -> list[str]:
+    """What hatchling reads from the source tree besides ``src/``: the readme and any explicit license file."""
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    readme = project.get("readme")
+    needed = [readme if isinstance(readme, str) else readme.get("file")] if readme else []
+    return [name for name in [*needed, *project.get("license-files", [])] if name and "*" not in name]
+
+
+def test_dockerfile_builder_copies_the_readme_the_project_install_reads() -> None:
+    """``[project].readme`` is read by hatchling when ``uv sync --no-editable`` builds the wheel.
+
+    The image job runs only on a push to main, so a Dockerfile that does not copy
+    the file is not caught until main is red: this checks the files instead.
+    ``license-files`` is only required to stay out of ``.dockerignore``: the wheel
+    builds without it, and the metadata is the readme's alone.
+    """
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    readme = project.get("readme")
+    if readme:
+        name = readme if isinstance(readme, str) else readme["file"]
+        copied = _builder_copies_before_project_install()
+        assert any(
+            source in {".", "./", name} or name.startswith(source.rstrip("/") + "/") for source in copied
+        ), f"the builder stage must COPY {name} before `uv sync --no-editable` (copied: {copied})"
+
+
+def test_dockerignore_keeps_the_files_the_package_build_needs() -> None:
+    for name in _files_the_package_build_needs():
+        assert (ROOT / name).is_file(), f"pyproject.toml names {name}, which is not in the repository"
+        assert not _dockerignored(name), f"{name} is needed to build the package but .dockerignore excludes it"
 
 
 def test_dockerfile_puts_the_data_root_under_data_index() -> None:
