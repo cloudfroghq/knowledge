@@ -1,6 +1,6 @@
 # Operating ring 1 on GitHub Actions
 
-Runbook for whoever administers `cloudfroghq/knowledge`: what runs on Actions, what the `protect-main` ruleset requires, what it costs in minutes, how to rotate a read-only deploy key, how to roll back without leaving PRs blocked, and how a release is published to PyPI and npm. The weekly stale-documents report does not run here: each vault's workflow runs it, fetching `scripts/weekly-stale-report.py` and `scripts/notify-stale-report.sh` from this repository. What each job does and why is in [`README.md`](../../README.md), section "Tests and merge gates (ring 1)".
+Runbook for whoever administers `cloudfroghq/knowledge`: what runs on Actions, what the `protect-main` ruleset requires, what it costs in minutes, how to rotate a read-only deploy key, how to roll back without leaving PRs blocked, and how a release is published to PyPI and npm. The weekly stale-documents report does not run here: each vault's workflow runs it, fetching `scripts/weekly-stale-report.py` and `scripts/notify-stale-report.sh` from this repository. What each job does and why is in [`CONTRIBUTING.md`, "What CI runs"](../../CONTRIBUTING.md#what-ci-runs).
 
 ## 1. State
 
@@ -117,7 +117,11 @@ The function receives each repository as an argument so that it works the same i
 
 ## 6. Verifying a release
 
-`release-check.yml` is the verification between a tag and the marketplace pull request. It runs on every `git push origin v<x.y.z>` and by hand. Order of a release:
+`release-check.yml` is the verification between a tag and the marketplace pull request. It runs on every `git push origin v<x.y.z>` and by hand. It reads no secrets or environments, and its token is read-only. It checks, in this order: that `pyproject.toml`, `plugin.json`, the `cloudfrog-knowledge==<version>` of `.mcp.json`, `npm/package.json` and `uv.lock` agree (`scripts/check-version.sh`, which also compares the tag when the ref is a tag; from a branch there is no tag and it compares only the files); that each `tests/golden/v*/SHA256SUMS` holds and that `test_contract_frozen.py`, `test_contract_golden.py` and `test_plugin_manifest.py` pass with `sqlite-vec` loaded; that `claude plugin validate --strict plugin/claude-code` passes (Node 22 and Claude Code `2.1.296`, pinned exactly); and that the sdist and the wheel build and carry only the package (`tests/test_sdist_contents.py`). Running `uv build --out-dir <temporary dir outside the repo>` locally is fine as a packaging check, but `dist/` is never committed and a locally built artifact is never uploaded: every published sdist and wheel is built and published only by `.github/workflows/publish.yml` on the runner, and this workflow checks them.
+
+A dispatch uses the workflow of the ref you choose: `gh workflow run release-check.yml --ref main` works, a tag older than `release-check.yml` does not (it lacks the file).
+
+Order of a release:
 
 1. The release pull request (`scripts/bump-version.sh X.Y.Z`) passes ring1 and is merged.
 2. Before pushing the tag, rehearse on `main` with the same file the tag will use: `gh workflow run release-check.yml -R cloudfroghq/knowledge --ref main` and `gh workflow run publish.yml -R cloudfroghq/knowledge --ref main` (builds and verifies without publishing), and `gh run watch` each one. Without a tag, `check-version.sh` compares only the files.
